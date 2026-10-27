@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "darwin"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "A quasi-static solver for finite element methods"
+authors = [
+    { name="Lei Zhang", email="maxime.zh@gmail.com" }
+]
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

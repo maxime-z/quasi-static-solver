@@ -1,0 +1,3 @@
+Maxwell's equation, interface condtion & boundary condtions
+
+https://phys.libretexts.org/Bookshelves/Electricity_and_Magnetism/Electromagnetics_and_Applications_(Staelin)/02%3A_Introduction_to_Electrodynamics/2.06%3A_Boundary_conditions_for_electromagnetic_fields

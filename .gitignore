@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Test / runtime outputs
+tests/results/
+*.msh
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
