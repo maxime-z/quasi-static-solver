@@ -88,6 +88,7 @@ class Element(ABC):
 
         n_edges = len(edges)
         n_nodes = x_nodes.shape[0]
+        n_dim = x_nodes.shape[1]
 
         omega = 2 * np.pi * frequency
         sigma = material.sigma
@@ -122,9 +123,14 @@ class Element(ABC):
             K_phiphi += measure * coeff_phi * (grad_phys @ grad_phys.T)
 
             if source is not None:
-                current = np.asarray(source(lam @ x_nodes), dtype=complex)
-                rhs_edge += measure * (current @ w_phys.T)
-                rhs_node += measure * (current @ grad_phys.T)
+                raw = np.asarray(source(lam @ x_nodes), dtype=complex)
+                current = raw.reshape(-1)
+                if current.shape != (n_dim,):
+                    raise ValueError(
+                        f"source must return a length-{n_dim} vector, got shape {raw.shape}"
+                    )
+                rhs_edge += measure * (w_phys @ current)
+                rhs_node += measure * (grad_phys @ current)
 
         return LocalBlocks(K_AA, K_Aphi, K_phiA, K_phiphi, rhs_edge, rhs_node)
 

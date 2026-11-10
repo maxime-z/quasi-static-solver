@@ -18,7 +18,13 @@ import numpy as np
 import meshio
 import gmsh
 from darwin.mesh_io import Mesh
-from darwin.topology import build_topology, skin_facets, tag_boundary, Boundary, Topology
+from darwin.topology import (
+    build_topology,
+    skin_facets,
+    tag_boundary,
+    Boundary,
+    Topology,
+)
 from darwin.material import Material, EPSILON_0
 from darwin.elements import TriangleWhitney
 from darwin.assemble import assemble
@@ -48,12 +54,18 @@ def linear_system_analysis(k):
     condition_number_form_singular_values = singular_values[0] / singular_values[-1]
     singular_values = np.linalg.svd(k, compute_uv=False)
     condition_number_form_singular_values = singular_values[0] / singular_values[-1]
-    print(f"condition number from singular values: {condition_number_form_singular_values}")
+    print(
+        f"condition number from singular values: {condition_number_form_singular_values}"
+    )
     condition_number_from_scipy = np.linalg.cond(k)
     print(f"condition number from scipy: {condition_number_from_scipy}")
     matrix_rank = np.linalg.matrix_rank(k)
     print(f"matrix rank: {matrix_rank}")
-    return condition_number_form_singular_values, condition_number_from_scipy, matrix_rank
+    return (
+        condition_number_form_singular_values,
+        condition_number_from_scipy,
+        matrix_rank,
+    )
 
 
 def plot_domain(mesh, topology: Topology | None = None):
@@ -63,7 +75,9 @@ def plot_domain(mesh, topology: Topology | None = None):
     fig, ax = plt.subplots()
     triangle_cell_list = [points[c] for c in cells]
     ax.add_collection(
-        PolyCollection(triangle_cell_list, facecolors="#cfe8ff", edgecolors="0.3", linewidths=0.4)
+        PolyCollection(
+            triangle_cell_list, facecolors="#cfe8ff", edgecolors="0.3", linewidths=0.4
+        )
     )
     if topology is not None:
         skin_edges = topology.edges[topology.skin.edges]
@@ -203,13 +217,25 @@ system = assemble(darwin_mesh, topology, materials, fake_frequency, None, elemen
 
 linear_system_analysis(system.k_globals)
 
+#
+n_edges = len(topology.edges)
+K_aa = system.k_globals[:n_edges, :n_edges]
+print(f"# ===> K_aa shape: {K_aa.shape}")
+linear_system_analysis(K_aa)
+
+K_phi_phi = system.k_globals[n_edges:, n_edges:]
+print(f"# ===> K_phi_phi shape: {K_phi_phi.shape}")
+linear_system_analysis(K_phi_phi)
+
 
 # boundary conditions
 bottom_voltage_BC = DirichletWall(tag="bottom", voltage=-10.0)
 top_voltage_BC = DirichletWall(tag="top", voltage=10.0)
 
 
-contrainted_system = apply_dirichlet(system, topology, [bottom_voltage_BC, top_voltage_BC])
+contrainted_system = apply_dirichlet(
+    system, topology, [bottom_voltage_BC, top_voltage_BC]
+)
 
 # The electrode rows are the real statements φ = V. Taking the imaginary part
 # after apply_dirichlet turns those diagonals into 0, so the complex block is
