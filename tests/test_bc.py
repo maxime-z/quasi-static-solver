@@ -3,6 +3,7 @@
 import unittest
 
 import numpy as np
+from scipy.sparse.linalg import spsolve
 
 from darwin.assemble import System, assemble
 from darwin.bc import DirichletWall, FloatingConductor, apply_dirichlet, apply_floating
@@ -16,6 +17,15 @@ def square_mesh() -> Mesh:
     points = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
     cells = np.array([[0, 1, 3], [1, 2, 3]])
     return Mesh(points, cells, np.array([0, 0]), region_names={0: "air"})
+
+
+def fan_mesh() -> Mesh:
+    """Square fanned from one corner: every vertex is on the boundary."""
+    points = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [1.0, 1.0], [0.5, 1.0], [0.0, 1.0]]
+    )
+    cells = np.array([[0, i, i + 1] for i in range(1, len(points) - 1)])
+    return Mesh(points, cells, np.zeros(len(cells), dtype=int), region_names={0: "air"})
 
 
 def cube_mesh() -> Mesh:
@@ -94,6 +104,23 @@ def _identity_row(K: np.ndarray, i: int, value: complex = 1.0) -> None:
     col = np.array(K[:, i], copy=True)
     col[i] = 0.0
     np.testing.assert_allclose(col, 0.0, atol=1e-12)
+
+
+def _is_identity_row(K: np.ndarray, i: int) -> bool:
+    row = np.array(K[i, :], copy=True)
+    return np.isclose(row[i], 1.0) and np.count_nonzero(np.abs(row) > 1e-14) == 1
+
+
+def _assemble(mesh: Mesh, topology, source=None) -> System:
+    material = _unit_material()
+    return assemble(
+        mesh,
+        topology,
+        materials_by_region(mesh, {material.name: material}),
+        1.0,
+        source,
+        TriangleWhitney(),
+    )
 
 
 class TestDirichlet(unittest.TestCase):
@@ -248,6 +275,102 @@ class TestDirichlet(unittest.TestCase):
         with self.assertRaises(KeyError):
             apply_dirichlet(system, topology, [DirichletWall("missing", 0.0)])
 
+    def test_all_walls_grounded_keep_the_interior_chord(self):
+        """A chord between two grounded walls is not tangential and stays free."""
+        mesh = square_mesh()
+        facets, tags = tag_boundary(mesh, square_predicates())
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        system = _assemble(mesh, topology, lambda x: np.array([0.0, 1.0]))
+        k0 = system.k_globals.toarray()
+        n_edges = len(topology.edges)
+        skin = {int(e) for e in topology.skin.edges}
+        # Diagonal (1, 3) joins the bottom wall to the top wall. Both are at 0 V.
+        chord = next(
+            eid
+            for eid, (a, b) in enumerate(topology.edges)
+            if {int(a), int(b)} == {1, 3}
+        )
+        self.assertNotIn(chord, skin)
+
+        constrained = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall(tag, 0.0) for tag in square_predicates()],
+        )
+        k1 = constrained.k_globals.toarray()
+        rhs1 = constrained.f_globals
+
+        for edge in skin:
+            _identity_row(k1, edge)
+            self.assertEqual(rhs1[edge], 0.0)
+
+        # The chord keeps its stiffness row and its load.
+        self.assertFalse(_is_identity_row(k1, chord))
+        np.testing.assert_allclose(k1[chord, chord], k0[chord, chord], atol=1e-12)
+        np.testing.assert_allclose(rhs1[chord], system.f_globals[chord], atol=1e-12)
+
+        # Every node is Dirichlet, so the chord is the only free unknown. The
+        # old node-pair rule replaced it too, and this solution was zero.
+        x = spsolve(constrained.k_globals.tocsr(), constrained.f_globals)
+        self.assertTrue(np.all(np.isfinite(x)))
+        self.assertGreater(abs(x[chord]), 1e-12)
+
+    def test_fan_mesh_keeps_its_chords(self):
+        """With no interior node every edge is skin or chord; the chords stay."""
+        mesh = fan_mesh()
+        facets, tags = tag_boundary(mesh, square_predicates())
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        system = _assemble(mesh, topology, lambda x: np.array([0.0, 1.0]))
+        constrained = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall(tag, 0.0) for tag in square_predicates()],
+        )
+        k1 = constrained.k_globals.toarray()
+        n_edges = len(topology.edges)
+        skin = {int(e) for e in topology.skin.edges}
+
+        free = [e for e in range(n_edges) if not _is_identity_row(k1, e)]
+        self.assertEqual(len(skin), 6)
+        self.assertEqual(free, sorted(set(range(n_edges)) - skin))
+        self.assertEqual(len(free), 3)
+
+        x = spsolve(constrained.k_globals.tocsr(), constrained.f_globals)
+        self.assertTrue(np.all(np.isfinite(x)))
+        self.assertGreater(np.max(np.abs(x[:n_edges])), 1e-12)
+
+    def test_cube_diagonal_chord_is_kept(self):
+        """The cube diagonal joins two grounded faces and is not tangential."""
+        mesh = cube_mesh()
+        facets, tags = tag_boundary(mesh, cube_predicates())
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        material = _unit_material()
+        system = assemble(
+            mesh,
+            topology,
+            materials_by_region(mesh, {material.name: material}),
+            1.0,
+            None,
+            TetrahedronWhitney(),
+        )
+        k0 = system.k_globals.toarray()
+        # Edge (0, 6) runs from (0, 0, 0) to (1, 1, 1): xmin to zmax.
+        diagonal = next(
+            eid
+            for eid, (a, b) in enumerate(topology.edges)
+            if {int(a), int(b)} == {0, 6}
+        )
+        self.assertNotIn(diagonal, {int(e) for e in topology.skin.edges})
+
+        constrained = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall("xmin", 0.0), DirichletWall("zmax", 0.0)],
+        )
+        k1 = constrained.k_globals.toarray()
+        self.assertFalse(_is_identity_row(k1, diagonal))
+        np.testing.assert_allclose(k1[diagonal, diagonal], k0[diagonal, diagonal], atol=1e-12)
+
     def test_empty_wall_list_returns_the_same_system(self):
         _, topology, system = _assemble_square()
         out = apply_dirichlet(system, topology, [])
@@ -305,6 +428,37 @@ class TestFloating(unittest.TestCase):
         np.testing.assert_allclose(
             rhs1[master], rhs0[master] + rhs0[slave] + current, atol=1e-12
         )
+
+    def test_tag_spanning_two_walls_keeps_the_chord(self):
+        """A floating tag over two walls must not zero the chord between them."""
+        mesh = square_mesh()
+        facets, tags = tag_boundary(
+            mesh,
+            {"corner": lambda x: np.isclose(x[0], 0.0) or np.isclose(x[1], 0.0)},
+        )
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        system = _assemble(mesh, topology)
+        k0 = system.k_globals.toarray()
+        chord = next(
+            eid
+            for eid, (a, b) in enumerate(topology.edges)
+            if {int(a), int(b)} == {1, 3}
+        )
+        self.assertEqual(
+            sorted(int(n) for n in topology.boundary["corner"].nodes), [0, 1, 3]
+        )
+
+        constrained = apply_floating(
+            system, topology, [FloatingConductor("corner", 2.0)]
+        )
+        k1 = constrained.k_globals.toarray()
+
+        # The two skin edges of the tag are tangential and become identity rows.
+        for edge in topology.boundary["corner"].edges:
+            _identity_row(k1, int(edge))
+        # The chord joins the two walls but lies in the interior.
+        self.assertFalse(_is_identity_row(k1, chord))
+        np.testing.assert_allclose(k1[chord, chord], k0[chord, chord], atol=1e-12)
 
     def test_dirichlet_and_floating_on_the_same_node_raise(self):
         _, topology, system = _assemble_square()

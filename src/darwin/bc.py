@@ -68,14 +68,24 @@ def _node_voltages(
     return voltages
 
 
-def _edges_with_both_ends_in(
+def _skin_edges_with_both_ends_in(
     topology: Topology, nodes: set[int]
 ) -> list[int]:
-    """Global edge ids whose two endpoints both lie in ``nodes``."""
+    """Boundary edges whose two endpoints both lie in ``nodes``.
+
+    Only an edge that lies on the skin is tangential to a wall. Two nodes can
+    belong to two different walls at the same potential; the edge between them
+    then cuts through the interior and is not tangential to either wall.
+    Zeroing its circulation would impose ``A.dl = 0`` on a line that is not on
+    a conductor.
+    """
     if len(nodes) < 2:
         return []
+    on_skin = {int(e) for e in topology.skin.edges}
     edges: list[int] = []
     for eid, (n1, n2) in enumerate(topology.edges):
+        if eid not in on_skin:
+            continue
         if int(n1) in nodes and int(n2) in nodes:
             edges.append(eid)
     return edges
@@ -86,12 +96,17 @@ def _equipotential_tangential_edges(
 ) -> list[int]:
     """Tangential edges of each equipotential Dirichlet set.
 
-    An edge is eliminated only when both endpoints carry the same prescribed
-    voltage. Shared outline edges of a grounded box are included; edges that
-    join two electrodes at different voltages are not.
+    An edge is eliminated when it is on the skin, both endpoints carry the
+    same prescribed voltage, and it therefore has ``n x A = 0``. An edge that
+    joins two different walls at the same voltage is a chord through the
+    interior: it is not on the skin and must stay free. Shared outline edges
+    of a grounded box are on the skin and are still eliminated.
     """
+    on_skin = {int(e) for e in topology.skin.edges}
     edges: list[int] = []
     for eid, (n1, n2) in enumerate(topology.edges):
+        if eid not in on_skin:
+            continue
         n1, n2 = int(n1), int(n2)
         if n1 not in voltages or n2 not in voltages:
             continue
@@ -208,7 +223,7 @@ def apply_floating(
         floating_nodes_by_tag[conductor.tag] = nodes
 
     for nodes in floating_nodes_by_tag.values():
-        for edge in _edges_with_both_ends_in(topology, nodes):
+        for edge in _skin_edges_with_both_ends_in(topology, nodes):
             if not _is_identity_row(K, edge):
                 _set_identity_dof(K, rhs, int(edge), 0.0)
 
