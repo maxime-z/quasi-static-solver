@@ -220,6 +220,32 @@ class TestCoulomb(unittest.TestCase):
             gauged.system.k_globals.shape[0],
         )
 
+    def test_grounded_disjoint_squares_build_the_mass_weighted_constraint(self):
+        mesh, topology = _disjoint_squares()
+        system = _assemble(mesh, topology)
+        grounded = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall("A", 0.0), DirichletWall("B", 0.0)],
+        )
+        gauged = apply_gauge(grounded, topology, GaugeKind.COULOMB)
+        n_edges = topology.edges.shape[0]
+        n_nodes = mesh.points.shape[0]
+        identity = _identity_rows(gauged.system.k_globals.tocsr())
+        free_edges = [e for e in range(n_edges) if e not in identity]
+        free_nodes = [
+            n for n in range(n_nodes) if n_edges + n not in identity
+        ]
+        m = gauged.system.m_edge_globals
+        g = topology.incidence_matrix
+        expected = m[np.ix_(free_edges, free_edges)] @ g[
+            np.ix_(free_edges, free_nodes)
+        ]
+        c = _coulomb_block(gauged.system, n_edges).toarray()
+        np.testing.assert_allclose(
+            c[free_edges], expected, rtol=1e-12, atol=1e-12
+        )
+
     def test_one_floating_square_drops_one_column_on_that_piece(self):
         mesh, topology = _disjoint_squares()
         system = _assemble(mesh, topology)

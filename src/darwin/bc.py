@@ -175,6 +175,7 @@ def apply_dirichlet(
         rhs,
         system.edge_dofs.copy(),
         system.node_dofs.copy(),
+        m_edge_globals=system.m_edge_globals
     )
 
 
@@ -255,4 +256,5 @@ def apply_floating(
         rhs,
         system.edge_dofs.copy(),
         system.node_dofs.copy(),
+        m_edge_globals=system.m_edge_globals,
     )

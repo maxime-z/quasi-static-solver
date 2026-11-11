@@ -10,7 +10,6 @@ from darwin.mesh_io import Mesh
 from darwin.topology import Topology
 
 
-
 @dataclass
 class System:
     k_globals: csr_matrix
@@ -18,6 +17,7 @@ class System:
     edge_dofs: np.ndarray
     node_dofs: np.ndarray
     p_dofs: np.ndarray | None = None
+    m_edge_globals: csr_matrix | None = None  # mass matrix for edges
 
 
 def _scatter(rows, cols, vals, row_dofs, col_dofs, block) -> None:
@@ -55,6 +55,10 @@ def assemble(
     vals: list[np.ndarray] = []
     rhs = np.zeros(n_dof, dtype=complex)
 
+    rows_m_edge: list[np.ndarray] = []
+    cols_m_edge: list[np.ndarray] = []
+    vals_m_edge: list[np.ndarray] = []
+
     gauss_points = GaussianQuadrature(mesh.points.shape[1], degree=quadrature_degree)
 
     for id_cell, cell in enumerate(mesh.cells):
@@ -80,6 +84,10 @@ def assemble(
         _scatter(rows, cols, vals, edge_dof, node_dof, blocks.K_Aphi)
         _scatter(rows, cols, vals, node_dof, edge_dof, blocks.K_phiA)
         _scatter(rows, cols, vals, node_dof, node_dof, blocks.K_phiphi)
+        # scatter local mass matrix for edges to global rows and columns
+        _scatter(
+            rows_m_edge, cols_m_edge, vals_m_edge, edge_dof, edge_dof, blocks.mass_edge
+        )
         rhs[edge_dof] += blocks.rhs_edge
         rhs[node_dof] += blocks.rhs_node
 
@@ -92,9 +100,24 @@ def assemble(
         col_index = np.array([], dtype=int)
         data = np.array([], dtype=complex)
 
+    if rows_m_edge:
+        row_index_m_edge = np.concatenate(rows_m_edge)
+        col_index_m_edge = np.concatenate(cols_m_edge)
+        data_m_edge = np.concatenate(vals_m_edge)
+    else:
+        row_index_m_edge = np.array([], dtype=int)
+        col_index_m_edge = np.array([], dtype=int)
+        data_m_edge = np.array([], dtype=complex)
+
     k_matrix = coo_matrix(
         (data, (row_index, col_index)),
         shape=(n_dof, n_dof),
         dtype=complex,
     ).tocsr()
-    return System(k_matrix, rhs, edge_dofs, node_dofs)
+
+    m_edge_matrix = coo_matrix(
+        (data_m_edge, (row_index_m_edge, col_index_m_edge)),
+        shape=(n_edges, n_edges),
+        dtype=complex,
+    ).tocsr()
+    return System(k_matrix, rhs, edge_dofs, node_dofs, m_edge_globals=m_edge_matrix)

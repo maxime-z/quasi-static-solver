@@ -14,6 +14,7 @@ class LocalBlocks:
     K_Aphi: np.ndarray  # (n_edges, n_nodes)
     K_phiA: np.ndarray  # (n_nodes, n_edges)
     K_phiphi: np.ndarray  # (n_nodes, n_nodes)
+    mass_edge: np.ndarray  # (n_edges, n_edges) integral(w_phys @ w_phys.T)
     rhs_edge: np.ndarray  # (n_edges,)
     rhs_node: np.ndarray  # (n_nodes,)
 
@@ -101,6 +102,7 @@ class Element(ABC):
         K_Aphi = np.zeros((n_edges, n_nodes), dtype=complex)
         K_phiA = np.zeros((n_nodes, n_edges), dtype=complex)
         K_phiphi = np.zeros((n_nodes, n_nodes), dtype=complex)
+        mass_edge = np.zeros((n_edges, n_edges), dtype=float)
         rhs_edge = np.zeros(n_edges, dtype=complex)
         rhs_node = np.zeros(n_nodes, dtype=complex)
 
@@ -116,8 +118,11 @@ class Element(ABC):
             grad_phys = self.gradient_nodal_basis_functions(x_hat) @ inv_J
             measure = wi * abs_det_J
 
+
+            mass_edge_gp = measure * (w_phys @ w_phys.T)
+            mass_edge += mass_edge_gp
             K_AA += wi * nu * _physical_curl_gram(curl_ref, J, abs_det_J)
-            K_AA += measure * coeff_A * (w_phys @ w_phys.T)
+            K_AA += coeff_A * mass_edge_gp
             K_Aphi += measure * coeff_phi * (w_phys @ grad_phys.T)
             K_phiA += measure * coeff_A * (grad_phys @ w_phys.T)
             K_phiphi += measure * coeff_phi * (grad_phys @ grad_phys.T)
@@ -132,7 +137,7 @@ class Element(ABC):
                 rhs_edge += measure * (w_phys @ current)
                 rhs_node += measure * (grad_phys @ current)
 
-        return LocalBlocks(K_AA, K_Aphi, K_phiA, K_phiphi, rhs_edge, rhs_node)
+        return LocalBlocks(K_AA, K_Aphi, K_phiA, K_phiphi, mass_edge, rhs_edge, rhs_node)
 
 
 def _physical_curl_gram(curl_ref: np.ndarray, J: np.ndarray, abs_det_J: float) -> np.ndarray:

@@ -50,9 +50,7 @@ def _is_identity_row(K, i: int) -> bool:
     return row.nnz == 1 and int(row.indices[0]) == i and np.isclose(row.data[0], 1.0)
 
 
-def _connected_components(
-    n_ids: int, ends: Iterable
-) -> list[list[int]]:
+def _connected_components(n_ids: int, ends: Iterable) -> list[list[int]]:
     """Union-find on 0..n_ids-1. Isolated ids stay singleton components."""
     parent = list(range(n_ids))
 
@@ -166,6 +164,7 @@ def _apply_tree_cotree_gauge(system: System, topology: Topology) -> System:
             f_gauge,
             system.edge_dofs.copy(),
             system.node_dofs.copy(),
+            m_edge_globals=system.m_edge_globals,
         ),
         tree_edges,
     )
@@ -180,11 +179,7 @@ def _free_dofs(
         [e for e in range(n_edges) if not _is_identity_row(k_globals, e)], dtype=int
     )
     free_nodes = np.array(
-        [
-            n
-            for n in range(n_nodes)
-            if not _is_identity_row(k_globals, n + n_edges)
-        ],
+        [n for n in range(n_nodes) if not _is_identity_row(k_globals, n + n_edges)],
         dtype=int,
     )
     return free_edges, free_nodes
@@ -210,10 +205,11 @@ def _multiplier_nodes(
 def _apply_coulomb_gauge(
     system: System, topology: Topology
 ) -> tuple[System, np.ndarray]:
-    """Append multipliers that enforce G_f^T a = 0.
+    """Append multipliers that enforce G_f^T M_f a = 0.
 
-    p lives on System.p_dofs. The constraint does not pin phi; tree_edges stay
-    empty because no edge unknown is set to zero.
+    The constraint is the L2 (mass-weighted) Coulomb gauge, not the
+    topological G_f^T a = 0. p lives on System.p_dofs. The constraint does
+    not pin phi; tree_edges stay empty because no edge unknown is set to zero.
     """
     k = system.k_globals
     n_edges, n_nodes = topology.incidence_matrix.shape
@@ -221,14 +217,20 @@ def _apply_coulomb_gauge(
     empty = np.array([], dtype=int)
 
     free_edges, free_nodes = _free_dofs(k, n_edges, n_nodes)
-    keep = _multiplier_nodes(
-        free_nodes, _connected_components(n_nodes, topology.edges)
-    )
+    keep = _multiplier_nodes(free_nodes, _connected_components(n_nodes, topology.edges))
     if keep.size == 0:
         return system, empty
 
     n_p = keep.size
-    c = topology.incidence_matrix[np.ix_(free_edges, keep)].astype(complex)
+    g_f = topology.incidence_matrix[np.ix_(free_edges, keep)].astype(complex)
+    m_edge = system.m_edge_globals
+    if m_edge is None:
+        raise ValueError("Coulomb gauge requires system.m_edge_globals")
+
+    m_free = m_edge[np.ix_(free_edges, free_edges)]  # (n_free, n_free)
+
+    c = m_free @ g_f  # (n_free, n_p)
+
     c_full = sparse.lil_matrix((n_total, n_p), dtype=complex)
     c_full[free_edges, :] = c
     c_full = c_full.tocsr()
@@ -247,6 +249,7 @@ def _apply_coulomb_gauge(
             system.edge_dofs.copy(),
             system.node_dofs.copy(),
             p_dofs,
+            system.m_edge_globals,
         ),
         np.array([], dtype=int),
     )

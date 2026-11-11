@@ -135,6 +135,31 @@ class TestAssemble(unittest.TestCase):
         perm = np.concatenate([edge_perm, node_perm])
         np.testing.assert_allclose(k_a, k_b[np.ix_(perm, perm)], atol=1e-12)
 
+    def test_edge_mass_is_added_once(self):
+        """K_AA(sigma=1) - K_AA(sigma=0) must be exactly j*omega*M."""
+        element = TriangleWhitney()
+        gauss = GaussianQuadrature(2, 2)
+        triangle = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        local_edges = [(0, 1), (1, 2), (2, 0)]
+        frequency = 1.0
+        conducting = Material(name="unit", sigma=1.0, mu_r=1.0 / MU_0, eps_r=0.0)
+        insulating = Material(name="unit", sigma=0.0, mu_r=1.0 / MU_0, eps_r=0.0)
+
+        with_mass = element.darwin_local_forms(
+            triangle, local_edges, frequency, conducting, gauss, None
+        )
+        without_mass = element.darwin_local_forms(
+            triangle, local_edges, frequency, insulating, gauss, None
+        )
+        omega = 2.0 * np.pi * frequency
+        self.assertTrue(np.isrealobj(with_mass.mass_edge))
+        np.testing.assert_allclose(
+            with_mass.K_AA - without_mass.K_AA,
+            1j * omega * with_mass.mass_edge,
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
     def test_reference_tet_matches_the_hand_curl_curl(self):
         mesh = _mesh(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
