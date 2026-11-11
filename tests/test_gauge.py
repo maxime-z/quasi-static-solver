@@ -15,7 +15,7 @@ from darwin.topology import Boundary, Topology, build_topology, tag_boundary
 from darwin.visu import plot_configuration
 from pathlib import Path
 
-result_path = Path("results")
+result_path = Path(__file__).parent / "results"
 
 
 def _line_topology() -> Topology:
@@ -190,6 +190,60 @@ class TestTreeCotree(unittest.TestCase):
             gauged.system.k_globals.toarray()
         )
         self.assertEqual(nullity, 1)
+
+
+def _coulomb_block(system: System, n_edges: int):
+    p_dofs = system.p_dofs
+    assert p_dofs is not None
+    return system.k_globals[:n_edges, p_dofs]
+
+
+class TestCoulomb(unittest.TestCase):
+    def test_grounded_disjoint_squares_drop_no_extra_column(self):
+        mesh, topology = _disjoint_squares()
+        system = _assemble(mesh, topology)
+        grounded = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall("A", 0.0), DirichletWall("B", 0.0)],
+        )
+        gauged = apply_gauge(grounded, topology, GaugeKind.COULOMB)
+        n_edges = topology.edges.shape[0]
+        n_interior = 2
+        self.assertEqual(len(gauged.tree_edges), 0)
+        self.assertIsNotNone(gauged.system.p_dofs)
+        self.assertEqual(len(gauged.system.p_dofs), n_interior)
+        c = _coulomb_block(gauged.system, n_edges).toarray()
+        self.assertEqual(np.linalg.matrix_rank(c), n_interior)
+        self.assertEqual(
+            np.linalg.matrix_rank(gauged.system.k_globals.toarray()),
+            gauged.system.k_globals.shape[0],
+        )
+
+    def test_one_floating_square_drops_one_column_on_that_piece(self):
+        mesh, topology = _disjoint_squares()
+        system = _assemble(mesh, topology)
+        grounded = apply_dirichlet(system, topology, [DirichletWall("A", 0.0)])
+        gauged = apply_gauge(grounded, topology, GaugeKind.COULOMB)
+
+        n_a = mesh.points.shape[0] // 2
+        n_interior_a = 1
+        n_p = n_interior_a + (n_a - 1)
+        n_edges = topology.edges.shape[0]
+        self.assertEqual(len(gauged.system.p_dofs), n_p)
+        c = _coulomb_block(gauged.system, n_edges).toarray()
+        self.assertEqual(np.linalg.matrix_rank(c), n_p)
+
+        # Coulomb does not pin phi. The constant on the floating square is
+        # still a kernel vector; the saddle itself is too ill-conditioned for
+        # numpy's default rank cutoff to count that kernel as size 1.
+        kernel = np.zeros(gauged.system.k_globals.shape[0], dtype=complex)
+        kernel[n_edges + n_a : n_edges + 2 * n_a] = 1.0
+        residual = gauged.system.k_globals @ kernel
+        self.assertLess(
+            np.linalg.norm(residual) / np.linalg.norm(kernel),
+            1e-10,
+        )
 
 
 if __name__ == "__main__":

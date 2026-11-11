@@ -1,7 +1,9 @@
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass
 import numpy as np
+import scipy.sparse as sparse
 
 from darwin.assemble import System
 from darwin.topology import Topology
@@ -24,10 +26,13 @@ class GaugeResult:
 def apply_gauge(
     system: System, topology: Topology, kind: GaugeKind = GaugeKind.NONE
 ) -> GaugeResult:
-    """Return the gauged system and the tree edges written by the tree gauge.
+    """Return the gauged system.
 
-    Tree–cotree replaces a spanning set of free edge rows by a_e = 0. It does
-    not change nodal unknowns. Coulomb is not implemented.
+    Tree–cotree replaces a spanning set of free edge rows by a_e = 0 and lists
+    those edges in ``GaugeResult.tree_edges``. Coulomb appends Lagrange
+    multipliers on ``System.p_dofs`` so that G_f^T a = 0; ``tree_edges`` is
+    empty. Neither gauge changes nodal unknowns. A floating piece still needs
+    its own phi reference.
     """
     if kind == GaugeKind.NONE:
         return GaugeResult(system, np.array([], dtype=int))
@@ -35,7 +40,7 @@ def apply_gauge(
         system, tree_edges = _apply_tree_cotree_gauge(system, topology)
         return GaugeResult(system, np.asarray(tree_edges, dtype=int))
     if kind == GaugeKind.COULOMB:
-        raise NotImplementedError("Coulomb gauge is not implemented")
+        return GaugeResult(*_apply_coulomb_gauge(system, topology))
     raise ValueError(f"unknown gauge kind {kind!r}")
 
 
@@ -45,11 +50,11 @@ def _is_identity_row(K, i: int) -> bool:
     return row.nnz == 1 and int(row.indices[0]) == i and np.isclose(row.data[0], 1.0)
 
 
-def _fixed_edge_components(
-    n_nodes: int, fixed_ends: list[tuple[int, int]]
-) -> list[set[int]]:
-    """Nodes joined by edges that are already a_e = 0, plus every other node alone."""
-    parent = list(range(n_nodes))
+def _connected_components(
+    n_ids: int, ends: Iterable
+) -> list[list[int]]:
+    """Union-find on 0..n_ids-1. Isolated ids stay singleton components."""
+    parent = list(range(n_ids))
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -57,14 +62,14 @@ def _fixed_edge_components(
             i = parent[i]
         return i
 
-    for n1, n2 in fixed_ends:
-        r1, r2 = find(n1), find(n2)
+    for n1, n2 in ends:
+        r1, r2 = find(int(n1)), find(int(n2))
         if r1 != r2:
             parent[r2] = r1
 
-    groups: dict[int, set[int]] = defaultdict(set)
-    for node in range(n_nodes):
-        groups[find(node)].add(node)
+    groups: dict[int, list[int]] = defaultdict(list)
+    for node in range(n_ids):
+        groups[find(node)].append(node)
     return list(groups.values())
 
 
@@ -97,36 +102,24 @@ def _apply_tree_cotree_gauge(system: System, topology: Topology) -> System:
             neighbors[n1].append((n2, e))
             neighbors[n2].append((n1, e))
 
-    components = _fixed_edge_components(n_nodes, fixed_ends)
+    components = _connected_components(n_nodes, fixed_ends)
     component_of = [0] * n_nodes
     for i_comp, nodes in enumerate(components):
         for node in nodes:
             component_of[node] = i_comp
 
     # Connected pieces of the contracted graph: one tree is grown per piece.
-    parent = list(range(len(components)))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for n1, n2 in free_ends:
-        r1, r2 = find(component_of[n1]), find(component_of[n2])
-        if r1 != r2:
-            parent[r2] = r1
-
-    groups: dict[int, list[int]] = defaultdict(list)
-    for i_comp in range(len(components)):
-        groups[find(i_comp)].append(i_comp)
+    groups = _connected_components(
+        len(components),
+        ((component_of[n1], component_of[n2]) for n1, n2 in free_ends),
+    )
 
     fixed_nodes = {node for pair in fixed_ends for node in pair}
     seen_component: set[int] = set()
     visited_nodes: set[int] = set()
     tree_edges: list[int] = []
 
-    for group in groups.values():
+    for group in groups:
         fixed_members = [
             c for c in group if any(node in fixed_nodes for node in components[c])
         ]
@@ -175,4 +168,85 @@ def _apply_tree_cotree_gauge(system: System, topology: Topology) -> System:
             system.node_dofs.copy(),
         ),
         tree_edges,
+    )
+
+
+# apply coulomb gauge
+def _free_dofs(
+    k_globals: sparse.csr_matrix, n_edges: int, n_nodes: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Get the free degrees of freedom indices of the system. The dofs are separated into edge and node dofs."""
+    free_edges = np.array(
+        [e for e in range(n_edges) if not _is_identity_row(k_globals, e)], dtype=int
+    )
+    free_nodes = np.array(
+        [
+            n
+            for n in range(n_nodes)
+            if not _is_identity_row(k_globals, n + n_edges)
+        ],
+        dtype=int,
+    )
+    return free_edges, free_nodes
+
+
+def _multiplier_nodes(
+    free_nodes: np.ndarray, components: list[list[int]]
+) -> np.ndarray:
+    """G columns that stay in C: one drop per piece with no Dirichlet node."""
+    free = {int(n) for n in free_nodes}
+    keep: list[int] = []
+    for comp in components:
+        free_in = sorted(n for n in comp if n in free)
+        if not free_in:
+            continue
+        if any(n not in free for n in comp):
+            keep.extend(free_in)
+        else:
+            keep.extend(free_in[:-1])
+    return np.asarray(keep, dtype=int)
+
+
+def _apply_coulomb_gauge(
+    system: System, topology: Topology
+) -> tuple[System, np.ndarray]:
+    """Append multipliers that enforce G_f^T a = 0.
+
+    p lives on System.p_dofs. The constraint does not pin phi; tree_edges stay
+    empty because no edge unknown is set to zero.
+    """
+    k = system.k_globals
+    n_edges, n_nodes = topology.incidence_matrix.shape
+    n_total = n_edges + n_nodes
+    empty = np.array([], dtype=int)
+
+    free_edges, free_nodes = _free_dofs(k, n_edges, n_nodes)
+    keep = _multiplier_nodes(
+        free_nodes, _connected_components(n_nodes, topology.edges)
+    )
+    if keep.size == 0:
+        return system, empty
+
+    n_p = keep.size
+    c = topology.incidence_matrix[np.ix_(free_edges, keep)].astype(complex)
+    c_full = sparse.lil_matrix((n_total, n_p), dtype=complex)
+    c_full[free_edges, :] = c
+    c_full = c_full.tocsr()
+
+    z = sparse.csr_matrix((n_p, n_p), dtype=complex)
+    k_augmented = sparse.bmat([[k, c_full], [c_full.T, z]], format="csr")
+
+    f_augmented = np.concatenate([system.f_globals, np.zeros(n_p, dtype=complex)])
+
+    p_dofs = np.arange(n_total, n_total + n_p)
+
+    return (
+        System(
+            k_augmented,
+            f_augmented,
+            system.edge_dofs.copy(),
+            system.node_dofs.copy(),
+            p_dofs,
+        ),
+        np.array([], dtype=int),
     )

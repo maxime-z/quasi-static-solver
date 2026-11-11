@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 
 from darwin.elements import Element, GaussianQuadrature
 from darwin.material import Material
@@ -10,12 +10,14 @@ from darwin.mesh_io import Mesh
 from darwin.topology import Topology
 
 
+
 @dataclass
 class System:
-    k_globals: np.ndarray
+    k_globals: csr_matrix
     f_globals: np.ndarray
     edge_dofs: np.ndarray
     node_dofs: np.ndarray
+    p_dofs: np.ndarray | None = None
 
 
 def _scatter(rows, cols, vals, row_dofs, col_dofs, block) -> None:
