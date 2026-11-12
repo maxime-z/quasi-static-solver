@@ -44,7 +44,7 @@ def apply_gauge(
     raise ValueError(f"unknown gauge kind {kind!r}")
 
 
-def _is_identity_row(K, i: int) -> bool:
+def _is_identity_row(K: sparse.csr_matrix, i: int) -> bool:
     """True when row i is the statement that this one unknown equals the load."""
     row = K.getrow(i)
     return row.nnz == 1 and int(row.indices[0]) == i and np.isclose(row.data[0], 1.0)
