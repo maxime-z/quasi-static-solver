@@ -13,7 +13,7 @@ from darwin.assemble import assemble
 from darwin.elements import TriangleWhitney
 from darwin.bc import DirichletWall, apply_dirichlet
 import scipy.sparse
-from collections import defaultdict, deque
+from darwin.gauge import GaugeKind, apply_gauge
 
 
 def linear_system_analysis(k):
@@ -198,68 +198,12 @@ print(f"# ===> K_aa shape: {K_aa.shape}")
 linear_system_analysis(K_aa)
 
 
-# apply the Tree-Cotree gauge
-def _is_identity_row(K, i) -> bool:
-    """
-    Check if the i-th row of the matrix K is the identity row
-    K: scipy.sparse.csr_matrix
-    i: int
-    return: bool
-    """
-    row = K.getrow(i)
-    return row.nnz == 1 and int(row.indices[0]) == i and np.isclose(row.data[0], 1.0)
-
-
-def apply_tree_cotree_gauge(K_aa, rhs_edge, topology, root_nodes):
-    K = K_aa.tolil(copy=True)
-    rhs = np.array(rhs_edge, dtype=complex, copy=True)
-
-    # 1. Free edges
-    neighors = defaultdict(list)
-    for e in range(K.shape[0]):
-        if _is_identity_row(K, e):
-            continue
-        else:
-            n1, n2 = (int(n) for n in topology.edges[e])
-            neighors[n1].append((n2, e))
-            neighors[n2].append((n1, e))
-
-    # 2. Every PEC node is a root. No tree edge is associated to a root
-    visited = {int(n) for n in root_nodes}
-    queue = deque(visited)
-    tree_edges = []
-
-    # 3. First free edge that reachs an unvisited node becomes a tree edge.
-    # An edge whoese far end i already visited closes a loop, so it stays cotree.
-    while queue:
-        u = queue.popleft()
-        for v, e in neighors[u]:
-            if v in visited:
-                continue
-            visited.add(v)
-            tree_edges.append(e)
-            queue.append(v)
-
-    # 4. The free edges must reach every node which is a spanning tree.
-    n_nodes = topology.incidence_matrix.shape[1]
-    if len(visited) != n_nodes:
-        raise RuntimeError(
-            f"{n_nodes - len(visited)} nodes are not reachable from the root nodes"
-        )
-
-    # 5. same identity row steps as a homogeneous Dirichlet edge.
-    for e in tree_edges:
-        K[e, :] = 0.0
-        K[:, e] = 0.0
-        K[e, e] = 1.0
-        rhs[e] = 0.0
-
-    return K.tocsr(), rhs, tree_edges
-
-
-K_aa_gauge, rhs_edge_gauge, tree_edges = apply_tree_cotree_gauge(
-    K_aa, rhs_edge, topology, topology.boundary["wall"].nodes
-)
+# apply the Tree-Cotree gauge through the shared module: this script used to
+# carry its own copy of the rule, which is how it drifted from the solver.
+gauge = apply_gauge(system, topology, GaugeKind.TREE)
+tree_edges = gauge.tree_edges
+K_aa_gauge = gauge.system.k_globals[:n_edges, :n_edges]
+rhs_edge_gauge = gauge.system.f_globals[:n_edges]
 
 # analyze the system after applying the Tree-Cotree gauge
 linear_system_analysis(K_aa_gauge)

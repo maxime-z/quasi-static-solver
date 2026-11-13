@@ -31,8 +31,9 @@ def plot_configuration(
 
     Face color is the region id. A wall label comes from the matching boundary
     condition when one is passed; a tag with no condition is a magnetic wall.
-    Wall edges are every mesh edge whose two endpoints lie in that tag's node
-    set. An edge claimed by two tags is drawn once, for the first tag.
+    Wall edges are every skin edge whose two endpoints lie in that tag's node
+    set: an interior chord between two walls is not a wall. An edge claimed by
+    two tags is drawn once, for the first tag.
     """
     points = np.asarray(mesh.points, dtype=float)
     fig, ax = plt.subplots(figsize=(7.2, 5.4))
@@ -109,12 +110,16 @@ def _draw_walls(ax, points: np.ndarray, topology: Topology, walls: list | None):
     by_tag = {wall.tag: wall for wall in walls or []}
     claimed: set[int] = set()
     handles = []
+    on_skin = {int(e) for e in topology.skin.edges}
     for i_tag, (tag, wall) in enumerate(topology.boundary.items()):
         nodes = {int(n) for n in wall.nodes}
         edge_ids = [
             eid
             for eid, (n1, n2) in enumerate(topology.edges)
-            if int(n1) in nodes and int(n2) in nodes and eid not in claimed
+            if eid in on_skin
+            and int(n1) in nodes
+            and int(n2) in nodes
+            and eid not in claimed
         ]
         claimed.update(edge_ids)
         if not edge_ids:

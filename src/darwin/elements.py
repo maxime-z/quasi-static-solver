@@ -331,6 +331,27 @@ class TriangleWhitney(Element):
         return curl
 
 
+def _duffy_triangle_rule(degree: int):
+    """Gauss rule on the reference triangle through the Duffy map.
+
+    x = u, y = (1 - u) v turns the triangle into the unit square with
+    jacobian (1 - u), so n Gauss points per direction integrate every
+    polynomial of total degree <= 2n - 2 exactly.
+    """
+    n = (degree + 3) // 2
+    nodes, weights = np.polynomial.legendre.leggauss(n)
+    u = 0.5 * (nodes + 1.0)
+    wu = 0.5 * weights
+    points = np.empty((n * n, 2))
+    quad_weights = np.empty(n * n)
+    for i in range(n):
+        for j in range(n):
+            k = i * n + j
+            points[k] = (u[i], (1.0 - u[i]) * u[j])
+            quad_weights[k] = wu[i] * wu[j] * (1.0 - u[i])
+    return points, quad_weights
+
+
 class GaussianQuadrature:
     """Reference-cell rules. degree is the exact polynomial degree."""
 
@@ -371,6 +392,8 @@ class GaussianQuadrature:
 
     def __init__(self, dim: int, degree: int):
         rule = self._RULES.get((dim, degree))
+        if rule is None and dim == 2:
+            rule = _duffy_triangle_rule(degree)
         if rule is None:
             raise NotImplementedError(f"no rule for dim={dim}, degree={degree}")
         self.dim = dim
@@ -384,3 +407,7 @@ class GaussianQuadrature:
 
     def __len__(self):
         return len(self.weights)
+
+
+if __name__ == "__main__":
+    _duffy_triangle_rule(1)

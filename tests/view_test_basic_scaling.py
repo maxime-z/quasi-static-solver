@@ -1,9 +1,6 @@
 """Example to show the necessarity of scaling the matrix by block.
-- K_aa, K_phiphi, K_phia, K_aphi
+- Block scaling: K_aa, K_phiphi, K_phia, K_aphi
 - Schur scaling
-
-块缩放：A 块乘一个常数、φ 块乘一个常数（比如按块范数），只缩 A/φ，不动 C 和 p；
-Schur 缩放：p 块按 diag(S)^{1/2} 缩，S 是消去 u 后的 C^T K^{-1} C。
 
 """
 
