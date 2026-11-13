@@ -48,6 +48,7 @@ from matplotlib.collections import PolyCollection
 from darwin.assemble import assemble
 from darwin.bc import DirichletWall, apply_dirichlet
 from darwin.elements import TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.material import MU_0, Material
 from darwin.mesh_io import Mesh
 from darwin.topology import build_topology, tag_boundary
@@ -175,7 +176,9 @@ def study(mesh: Mesh) -> dict:
 
     material = Material(name="air", sigma=0.0, mu_r=1.0 / MU_0, eps_r=0.0)
     source = lambda x: np.array([0.0, 1.0])
-    system = assemble(mesh, topology, {0: material}, 0.0, source, element)
+    system = assemble(
+        Formulation.MQS, mesh, topology, {0: material}, 0.0, source, element
+    )
 
     constrained = apply_dirichlet(
         system, topology, [DirichletWall(tag, 0.0) for tag in predicates]

@@ -6,6 +6,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 
 from darwin.assemble import System
+from darwin.formulation import Formulation
 from darwin.solve import prepare, solve_direct
 
 
@@ -22,6 +23,7 @@ def _saddle() -> tuple[System, np.ndarray]:
     physical = np.array([0.5, -0.25, 0.3], dtype=complex)
     load = matrix @ physical
     system = System(
+        Formulation.MQS,
         csr_matrix(matrix),
         load,
         np.array([0]),

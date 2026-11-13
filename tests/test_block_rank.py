@@ -71,6 +71,7 @@ import numpy as np
 
 from darwin.assemble import assemble
 from darwin.elements import TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.material import EPSILON_0, MU_0, Material
 from darwin.mesh_io import Mesh
 from darwin.topology import build_topology
@@ -84,9 +85,10 @@ class TestBlockRank(unittest.TestCase):
         topology = build_topology(mesh)
 
         # nu = 1/mu = 1, and sigma = 0 so K_AA has no edge mass to fill the kernel.
-        # eps = 1 and frequency = 1/(2*pi) so omega = 1 and K_phiphi = j * grad-grad.
+        # Darwin phi_phi = eps; eps_r = 1/eps0 makes eps = 1, so K_phiphi = grad-grad.
         material = Material(name="unit", sigma=0.0, mu_r=1.0 / MU_0, eps_r=1.0 / EPSILON_0)
         system = assemble(
+            Formulation.DARWIN,
             mesh,
             topology,
             {0: material},

@@ -8,6 +8,7 @@ from scipy.sparse import csr_matrix
 from darwin.assemble import System, assemble
 from darwin.bc import DirichletWall, apply_dirichlet
 from darwin.elements import TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.gauge import GaugeKind, apply_gauge
 from darwin.material import Material
 from darwin.mesh_io import Mesh
@@ -32,6 +33,7 @@ def _line_topology() -> Topology:
 def _system(matrix: np.ndarray, load: np.ndarray) -> System:
     n_edges = 3
     return System(
+        Formulation.MQS,
         csr_matrix(matrix),
         load,
         np.arange(n_edges),
@@ -86,6 +88,7 @@ def _disjoint_squares():
 def _assemble(mesh: Mesh, topology: Topology) -> System:
     material = Material("body", sigma=1.0, mu_r=1.0, eps_r=1.0)
     return assemble(
+        Formulation.MQS,
         mesh,
         topology,
         {0: material},

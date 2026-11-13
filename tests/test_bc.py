@@ -8,6 +8,7 @@ from scipy.sparse.linalg import spsolve
 from darwin.assemble import System, assemble
 from darwin.bc import DirichletWall, FloatingConductor, apply_dirichlet, apply_floating
 from darwin.elements import TetrahedronWhitney, TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.material import EPSILON_0, MU_0, Material, materials_by_region
 from darwin.mesh_io import Mesh
 from darwin.topology import build_topology, tag_boundary
@@ -83,7 +84,9 @@ def _assemble_square() -> tuple[Mesh, object, System]:
     facets, tags = tag_boundary(mesh, square_predicates())
     topology = build_topology(mesh, boundary_tags=(facets, tags))
     materials = materials_by_region(mesh, {_unit_material().name: _unit_material()})
-    system = assemble(mesh, topology, materials, 1.0, None, TriangleWhitney())
+    system = assemble(
+        Formulation.DARWIN, mesh, topology, materials, 1.0, None, TriangleWhitney()
+    )
     return mesh, topology, system
 
 
@@ -92,7 +95,9 @@ def _assemble_cube() -> tuple[Mesh, object, System]:
     facets, tags = tag_boundary(mesh, cube_predicates())
     topology = build_topology(mesh, boundary_tags=(facets, tags))
     materials = materials_by_region(mesh, {_unit_material().name: _unit_material()})
-    system = assemble(mesh, topology, materials, 1.0, None, TetrahedronWhitney())
+    system = assemble(
+        Formulation.DARWIN, mesh, topology, materials, 1.0, None, TetrahedronWhitney()
+    )
     return mesh, topology, system
 
 
@@ -114,6 +119,7 @@ def _is_identity_row(K: np.ndarray, i: int) -> bool:
 def _assemble(mesh: Mesh, topology, source=None) -> System:
     material = _unit_material()
     return assemble(
+        Formulation.DARWIN,
         mesh,
         topology,
         materials_by_region(mesh, {material.name: material}),
@@ -346,6 +352,7 @@ class TestDirichlet(unittest.TestCase):
         topology = build_topology(mesh, boundary_tags=(facets, tags))
         material = _unit_material()
         system = assemble(
+            Formulation.DARWIN,
             mesh,
             topology,
             materials_by_region(mesh, {material.name: material}),

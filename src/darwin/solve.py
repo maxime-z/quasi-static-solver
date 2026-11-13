@@ -167,6 +167,7 @@ def _congruence(k, f, scale):
 
 def _replace_matrix(system: System, k, f) -> System:
     return System(
+        system.formulation,
         k.tocsr(),
         np.asarray(f, dtype=complex),
         system.edge_dofs.copy(),

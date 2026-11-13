@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from darwin.formulation import Formulation
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
@@ -12,6 +13,7 @@ from darwin.topology import Topology
 
 @dataclass
 class System:
+    formulation: Formulation
     k_globals: csr_matrix
     f_globals: np.ndarray
     edge_dofs: np.ndarray
@@ -29,6 +31,7 @@ def _scatter(rows, cols, vals, row_dofs, col_dofs, block) -> None:
 
 
 def assemble(
+    formulation: Formulation,
     mesh: Mesh,
     topology: Topology,
     materials: dict[int, Material],
@@ -70,6 +73,7 @@ def assemble(
         ]
         region = int(mesh.region_ids[id_cell])
         blocks = element.darwin_local_forms(
+            formulation,
             cell_nodes,
             edge_pair,
             frequency,
@@ -120,4 +124,6 @@ def assemble(
         shape=(n_edges, n_edges),
         dtype=complex,
     ).tocsr()
-    return System(k_matrix, rhs, edge_dofs, node_dofs, m_edge_globals=m_edge_matrix)
+    return System(
+        formulation, k_matrix, rhs, edge_dofs, node_dofs, m_edge_globals=m_edge_matrix
+    )

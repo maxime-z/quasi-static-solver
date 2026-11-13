@@ -14,6 +14,7 @@ from darwin.elements import TriangleWhitney
 from darwin.bc import DirichletWall, apply_dirichlet
 import scipy.sparse
 from darwin.gauge import GaugeKind, apply_gauge
+from darwin.formulation import Formulation
 
 
 def linear_system_analysis(k):
@@ -179,6 +180,7 @@ fake_frequency = 0.0
 
 element = TriangleWhitney()
 system = assemble(
+    Formulation.MQS,
     darwin_mesh, topology, materials, fake_frequency, loop_current, element
 )
 

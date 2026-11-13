@@ -6,6 +6,7 @@ import numpy as np
 
 from darwin.assemble import assemble
 from darwin.elements import GaussianQuadrature, TetrahedronWhitney, TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.material import EPSILON_0, MU_0, Material, materials_by_region
 from darwin.mesh_io import Mesh
 from darwin.topology import build_topology
@@ -44,7 +45,13 @@ class TestAssemble(unittest.TestCase):
         mesh = _mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], [[0, 1, 2]])
         topology = build_topology(mesh)
         system = assemble(
-            mesh, topology, _materials(mesh, _curl_only()), 0.0, None, TriangleWhitney()
+            Formulation.MQS,
+            mesh,
+            topology,
+            _materials(mesh, _curl_only()),
+            0.0,
+            None,
+            TriangleWhitney(),
         )
 
         k_global = system.k_globals.toarray()
@@ -69,7 +76,13 @@ class TestAssemble(unittest.TestCase):
         element = TriangleWhitney()
         frequency = 1.0
         system = assemble(
-            mesh, topology, _materials(mesh, material), frequency, None, element
+            Formulation.DARWIN,
+            mesh,
+            topology,
+            _materials(mesh, material),
+            frequency,
+            None,
+            element,
         )
 
         gauss = GaussianQuadrature(2, 2)
@@ -83,7 +96,13 @@ class TestAssemble(unittest.TestCase):
                 for n1, n2 in topology.edges[cell_edges]
             ]
             blocks = element.darwin_local_forms(
-                mesh.points[cell], edge_pair, frequency, material, gauss, None
+                Formulation.DARWIN,
+                mesh.points[cell],
+                edge_pair,
+                frequency,
+                material,
+                gauss,
+                None,
             )
             locals_aa.append(blocks.K_AA)
             locals_phiphi.append(blocks.K_phiphi)
@@ -109,8 +128,12 @@ class TestAssemble(unittest.TestCase):
         def source(_x):
             return np.array([1.0, 0.0])
 
-        plain = assemble(mesh, topology, materials, 0.0, None, element)
-        loaded = assemble(mesh, topology, materials, 0.0, source, element)
+        plain = assemble(
+            Formulation.MQS, mesh, topology, materials, 0.0, None, element
+        )
+        loaded = assemble(
+            Formulation.MQS, mesh, topology, materials, 0.0, source, element
+        )
 
         np.testing.assert_allclose(
             loaded.k_globals.toarray(), plain.k_globals.toarray(), atol=1e-12
@@ -126,8 +149,12 @@ class TestAssemble(unittest.TestCase):
         topo_a = build_topology(mesh_a)
         topo_b = build_topology(mesh_b)
         kwargs = dict(frequency=1.0, source=None, element=TriangleWhitney())
-        k_a = assemble(mesh_a, topo_a, _materials(mesh_a, material), **kwargs).k_globals.toarray()
-        k_b = assemble(mesh_b, topo_b, _materials(mesh_b, material), **kwargs).k_globals.toarray()
+        k_a = assemble(
+            Formulation.DARWIN, mesh_a, topo_a, _materials(mesh_a, material), **kwargs
+        ).k_globals.toarray()
+        k_b = assemble(
+            Formulation.DARWIN, mesh_b, topo_b, _materials(mesh_b, material), **kwargs
+        ).k_globals.toarray()
 
         b_of = {tuple(int(n) for n in edge): i for i, edge in enumerate(topo_b.edges)}
         edge_perm = np.array([b_of[tuple(int(n) for n in edge)] for edge in topo_a.edges])
@@ -146,10 +173,10 @@ class TestAssemble(unittest.TestCase):
         insulating = Material(name="unit", sigma=0.0, mu_r=1.0 / MU_0, eps_r=0.0)
 
         with_mass = element.darwin_local_forms(
-            triangle, local_edges, frequency, conducting, gauss, None
+            Formulation.MQS, triangle, local_edges, frequency, conducting, gauss, None
         )
         without_mass = element.darwin_local_forms(
-            triangle, local_edges, frequency, insulating, gauss, None
+            Formulation.MQS, triangle, local_edges, frequency, insulating, gauss, None
         )
         omega = 2.0 * np.pi * frequency
         self.assertTrue(np.isrealobj(with_mass.mass_edge))
@@ -167,7 +194,13 @@ class TestAssemble(unittest.TestCase):
         )
         topology = build_topology(mesh)
         system = assemble(
-            mesh, topology, _materials(mesh, _curl_only()), 0.0, None, TetrahedronWhitney()
+            Formulation.MQS,
+            mesh,
+            topology,
+            _materials(mesh, _curl_only()),
+            0.0,
+            None,
+            TetrahedronWhitney(),
         )
         k_global = system.k_globals.toarray()
         self.assertEqual(k_global.shape, (10, 10))

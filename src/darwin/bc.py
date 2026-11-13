@@ -171,6 +171,7 @@ def apply_dirichlet(
         _set_identity_dof(K, rhs, n_edges + node, complex(voltage))
 
     return System(
+        system.formulation,
         K.tocsr(),
         rhs,
         system.edge_dofs.copy(),
@@ -252,6 +253,7 @@ def apply_floating(
         rhs[master] += complex(conductor.current)
 
     return System(
+        system.formulation,
         K.tocsr(),
         rhs,
         system.edge_dofs.copy(),

@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from darwin.material import Material, MU_0, EPSILON_0
+from darwin.formulation import Formulation, coefficients, NodalEquation
 
 
 @dataclass(frozen=True)
@@ -70,12 +71,14 @@ class Element(ABC):
 
     def darwin_local_forms(
         self,
+        formulation: Formulation,
         x_nodes: np.ndarray,
         edges: list[tuple[int, int]],
         frequency: float,
         material: Material,
         gauss_points: GaussianQuadrature,
-        source=None,
+        source=None, # current source when formulation is MQS, J_s (electric current density) 
+        charge=None, # charge when formulation is Darwin, rho (electric charge density) 
     ) -> LocalBlocks:
         """Darwin element matrices for one triangle or one tetrahedron.
 
@@ -84,19 +87,16 @@ class Element(ABC):
         j*omega*sigma, and there is no -omega**2*epsilon term. A full-wave
         formulation is a second method on this class, using the same basis.
         """
-        if material is None:
-            raise ValueError(f"{type(self).__name__} requires a material")
-
         n_edges = len(edges)
         n_nodes = x_nodes.shape[0]
         n_dim = x_nodes.shape[1]
 
         omega = 2 * np.pi * frequency
         sigma = material.sigma
-        epsilon = material.eps_r * EPSILON_0
         nu = 1.0 / (material.mu_r * MU_0)
-        coeff_phi = sigma + 1j * omega * epsilon
         coeff_A = 1j * omega * sigma
+
+        coeffs = coefficients(formulation, material, frequency)
 
         K_AA = np.zeros((n_edges, n_edges), dtype=complex)
         K_Aphi = np.zeros((n_edges, n_nodes), dtype=complex)
@@ -123,9 +123,9 @@ class Element(ABC):
             mass_edge += mass_edge_gp
             K_AA += wi * nu * _physical_curl_gram(curl_ref, J, abs_det_J)
             K_AA += coeff_A * mass_edge_gp
-            K_Aphi += measure * coeff_phi * (w_phys @ grad_phys.T)
-            K_phiA += measure * coeff_A * (grad_phys @ w_phys.T)
-            K_phiphi += measure * coeff_phi * (grad_phys @ grad_phys.T)
+            K_Aphi += measure * coeffs.a_phi * (w_phys @ grad_phys.T)
+            K_phiA += measure * coeffs.phi_a * (grad_phys @ w_phys.T)
+            K_phiphi += measure * coeffs.phi_phi * (grad_phys @ grad_phys.T)
 
             if source is not None:
                 raw = np.asarray(source(lam @ x_nodes), dtype=complex)
@@ -135,7 +135,13 @@ class Element(ABC):
                         f"source must return a length-{n_dim} vector, got shape {raw.shape}"
                     )
                 rhs_edge += measure * (w_phys @ current)
-                rhs_node += measure * (grad_phys @ current)
+                if coeffs.nodal == NodalEquation.CONTINUITY:
+                    rhs_node += measure * (grad_phys @ current)
+
+            if charge is not None and coeffs.nodal == NodalEquation.GAUSS:
+                raw = np.asarray(charge(lam @ x_nodes), dtype=complex)
+                rhs_node += measure * lam * charge
+
 
         return LocalBlocks(K_AA, K_Aphi, K_phiA, K_phiphi, mass_edge, rhs_edge, rhs_node)
 

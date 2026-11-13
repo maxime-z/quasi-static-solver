@@ -4,7 +4,7 @@ from enum import Enum
 from dataclasses import dataclass
 import numpy as np
 import scipy.sparse as sparse
-
+from darwin.formulation import Formulation
 from darwin.assemble import System
 from darwin.topology import Topology
 
@@ -36,6 +36,13 @@ def apply_gauge(
     """
     if kind == GaugeKind.NONE:
         return GaugeResult(system, np.array([], dtype=int))
+    if system.formulation == Formulation.DARWIN:
+        raise ValueError(
+            "Darwin is already fixed by the weak Gauss row; tree-cotree sets "
+            "A on tree edges and changes E. Use Formulation.MQS, or "
+            "GaugeKind.NONE. (Coulomb gauge + Gauss is possible but unnecessary.)"
+        )
+
     if kind == GaugeKind.TREE:
         system, tree_edges = _apply_tree_cotree_gauge(system, topology)
         return GaugeResult(system, np.asarray(tree_edges, dtype=int))
@@ -160,6 +167,7 @@ def _apply_tree_cotree_gauge(system: System, topology: Topology) -> System:
 
     return (
         System(
+            system.formulation,
             k_gauge.tocsr(),
             f_gauge,
             system.edge_dofs.copy(),
@@ -244,6 +252,7 @@ def _apply_coulomb_gauge(
 
     return (
         System(
+            system.formulation,
             k_augmented,
             f_augmented,
             system.edge_dofs.copy(),

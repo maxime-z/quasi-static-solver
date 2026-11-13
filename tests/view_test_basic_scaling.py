@@ -11,6 +11,7 @@ from darwin.topology import tag_boundary, build_topology, Topology
 from darwin.material import Material
 from darwin.assemble import assemble
 from darwin.elements import TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.bc import DirichletWall, apply_dirichlet
 from darwin.gauge import apply_gauge, GaugeKind
 from darwin.solve import prepare, solve_direct
@@ -69,6 +70,7 @@ def main():
     air = Material("air", sigma=0.0, mu_r=1.0, eps_r=1.0)
     materials = {0: air}
     system = assemble(
+        Formulation.DARWIN,
         mesh,
         topology,
         materials,

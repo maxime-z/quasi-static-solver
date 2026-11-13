@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from darwin.elements import GaussianQuadrature, TetrahedronWhitney, TriangleWhitney
+from darwin.formulation import Formulation
 from darwin.material import MU_0, Material
 
 
@@ -112,6 +113,7 @@ def main():
     element = TriangleWhitney()
     nu = 1.0 / (material.mu_r * MU_0)
     blocks = element.darwin_local_forms(
+        Formulation.MQS,
         NODES,
         EDGES,
         frequency=0.0,
@@ -193,6 +195,7 @@ def plot_tet(path):
 def tet_smoke(material):
     element = TetrahedronWhitney()
     blocks = element.darwin_local_forms(
+        Formulation.MQS,
         TET_NODES,
         TET_EDGES,
         frequency=0.0,

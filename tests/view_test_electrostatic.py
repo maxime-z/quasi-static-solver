@@ -22,7 +22,6 @@ from darwin.topology import (
     build_topology,
     skin_facets,
     tag_boundary,
-    Boundary,
     Topology,
 )
 from darwin.material import Material, EPSILON_0
@@ -32,6 +31,7 @@ from darwin.bc import DirichletWall, apply_dirichlet
 import scipy
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
+from darwin.formulation import Formulation
 
 
 from pathlib import Path
@@ -209,7 +209,7 @@ materials = {0: air}
 fake_frequency = 1 / (2 * np.pi)
 
 element = TriangleWhitney()
-system = assemble(darwin_mesh, topology, materials, fake_frequency, None, element)
+system = assemble(Formulation.DARWIN, darwin_mesh, topology, materials, fake_frequency, None, element)
 # n_edges = topology.edges.shape[0]
 # k_phi_phi = (
 #     np.imag(system.k_globals[n_edges:, n_edges:]) / EPSILON_0
