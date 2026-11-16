@@ -7,17 +7,21 @@ Exact fields::
 
     phi = cos(pi x / 2) cos(pi y / 2)
     chi = chi0 (cos(pi x / 2) cos(pi y / 2))^2
-    psi = alpha phi,   alpha = -(sigma + j omega eps) / (j omega sigma)
+    psi = alpha phi,   alpha = -sigma / (j omega (sigma + j omega eps))
     A   = grad(psi) + curl(chi e_z)
     E   = -j omega A - grad(phi),   B = curl A = -laplacian(chi) e_z
 
-with the source
+with the source and the charge
 
-    J_s = curl nu curl A + j omega sigma A + (sigma + j omega eps) grad phi.
+    J_s = curl nu curl A + j omega sigma A + (sigma + j omega eps) grad phi,
+    rho = div(eps E) = -j omega eps div(A) - eps laplacian(phi).
 
 Why this is a Darwin problem and not just a random smooth pair: ``div J_s = 0``
 because ``div A = laplacian(psi) = alpha laplacian(phi)`` and
-``j omega sigma alpha + (sigma + j omega eps) = 0``. The tangential component of
+``j omega sigma alpha + (sigma + j omega eps) = 0``. ``alpha`` also makes
+``div(eps E) = -eps laplacian(phi) (1 + j omega alpha)`` equal to
+``-j omega eps^2 laplacian(phi) / (sigma + j omega eps)``, so the Gauss row is
+satisfied with that rho. The tangential component of
 ``A`` vanishes on every wall: ``grad(psi)`` is normal there and ``chi`` has a
 vanishing normal derivative, so ``curl(chi e_z)`` has no normal component.
 ``phi`` vanishes on every wall by construction. The exact solution therefore
@@ -48,7 +52,7 @@ _OMEGA = 2.0 * np.pi * FREQUENCY
 _EPS = EPS_R * EPSILON_0
 _NU = 1.0 / (MU_R * MU_0)
 _COEFF_PHI = SIGMA + 1j * _OMEGA * _EPS
-_ALPHA = -_COEFF_PHI / (1j * _OMEGA * SIGMA)
+_ALPHA = -SIGMA / (1j * _OMEGA * _COEFF_PHI)
 _HALF_PI = 0.5 * np.pi
 _PI_CUBED = np.pi**3
 
@@ -95,8 +99,9 @@ def _grad_chi(points):
 
 
 def _laplacian_chi(points):
+    """``laplacian(chi) = -(pi^2/2) chi0 [cos(pi x) cos^2(pi y/2) + cos(pi y) cos^2(pi x/2)]``."""
     x, y = points[:, 0], points[:, 1]
-    return -(_HALF_PI**2) * CHI0 * (
+    return -(2.0 * _HALF_PI**2) * CHI0 * (
         np.cos(np.pi * x) * _cos_half(y) ** 2 + np.cos(np.pi * y) * _cos_half(x) ** 2
     )
 
@@ -121,6 +126,17 @@ def exact_e(points):
 def exact_b(points):
     """``Bz = -laplacian(chi)``, shape ``(n_points, 1)``."""
     return (-_laplacian_chi(np.atleast_2d(points)))[:, None]
+
+
+def exact_rho(points):
+    """``rho = -j omega eps^2 laplacian(phi) / (sigma + j omega eps)``.
+
+    This is the charge that makes the exact fields satisfy the Gauss row:
+    ``rho = div(eps E) = -j omega eps div(A) - eps laplacian(phi)``.
+    """
+    points = np.atleast_2d(points)
+    laplacian_phi = -0.5 * np.pi**2 * PHI0 * _cos_half(points[:, 0]) * _cos_half(points[:, 1])
+    return -1j * _OMEGA * _EPS**2 * laplacian_phi / _COEFF_PHI
 
 
 def _source_array(points):
@@ -190,6 +206,7 @@ def solve_case(n: int, quadrature_degree: int = 6):
         FREQUENCY,
         source,
         element,
+        charge=exact_rho,
         quadrature_degree=quadrature_degree,
     )
     system = apply_dirichlet(system, topology, [DirichletWall(tag="wall", voltage=0.0)])
@@ -204,3 +221,17 @@ def errors(n: int) -> tuple[float, float]:
         relative_l2(e_samples, exact_e(e_samples.centroid)),
         relative_l2(b_samples, exact_b(b_samples.centroid)),
     )
+
+
+if __name__ == "__main__":
+    previous: tuple[float, float] | None = None
+    for n in (4, 8, 16, 32, 64):
+        current = errors(n)
+        order = ""
+        if previous is not None:
+            order = (
+                f"  order E {np.log2(previous[0] / current[0]):.2f}"
+                f"  B {np.log2(previous[1] / current[1]):.2f}"
+            )
+        print(f"n={n:3d}  E={current[0]:.4e}  B={current[1]:.4e}{order}")
+        previous = current

@@ -97,6 +97,11 @@ class Element(ABC):
         coeff_A = 1j * omega * sigma
 
         coeffs = coefficients(formulation, material, frequency)
+        if charge is not None and coeffs.nodal != NodalEquation.GAUSS:
+            raise ValueError(
+                "charge rho is only used by the Darwin Gauss row; "
+                "use Formulation.DARWIN or pass charge=None"
+            )
 
         K_AA = np.zeros((n_edges, n_edges), dtype=complex)
         K_Aphi = np.zeros((n_edges, n_nodes), dtype=complex)
@@ -140,7 +145,11 @@ class Element(ABC):
 
             if charge is not None and coeffs.nodal == NodalEquation.GAUSS:
                 raw = np.asarray(charge(lam @ x_nodes), dtype=complex)
-                rhs_node += measure * lam * charge
+                if raw.size != 1:
+                    raise ValueError(
+                        f"charge must return a scalar rho, got shape {raw.shape}"
+                    )
+                rhs_node += measure * lam * raw.reshape(-1)[0]
 
 
         return LocalBlocks(K_AA, K_Aphi, K_phiA, K_phiphi, mass_edge, rhs_edge, rhs_node)

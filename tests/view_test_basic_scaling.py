@@ -2,6 +2,10 @@
 - Block scaling: K_aa, K_phiphi, K_phia, K_aphi
 - Schur scaling
 
+The Darwin system is assembled here because its phi block is eps-scoped
+(~1e-11 F/m) while K_aa is ~1e6 1/(H m).  Darwin fixes phi with the weak
+Gauss row, so no gauge is applied and p_dofs is empty.
+
 """
 
 import numpy as np
@@ -13,7 +17,6 @@ from darwin.assemble import assemble
 from darwin.elements import TriangleWhitney
 from darwin.formulation import Formulation
 from darwin.bc import DirichletWall, apply_dirichlet
-from darwin.gauge import apply_gauge, GaugeKind
 from darwin.solve import prepare, solve_direct
 
 
@@ -79,14 +82,13 @@ def main():
         element=TriangleWhitney(),
     )
 
-    # apply grounded wall
+    # apply grounded wall; Darwin needs no gauge, the Gauss row fixes phi
     system = apply_dirichlet(system, topology, [DirichletWall("wall", 0.0)])
-    gauged = apply_gauge(system, topology, GaugeKind.COULOMB).system
 
-    k = gauged.k_globals
+    k = system.k_globals
     edge = slice(0, n_edges)
     node = slice(n_edges, n_edges + n_nodes)
-    p = gauged.p_dofs
+    p = np.array([], dtype=int) if system.p_dofs is None else system.p_dofs
 
     print(f"number of edges: {n_edges}")
     print(f"number of nodes: {n_nodes}")
@@ -96,33 +98,36 @@ def main():
     _report("K_phiphi", k[node, node])
     _report("K_phia", k[edge, node])
     _report("K_aphi", k[node, edge])
-    _report("C", k[:, p])
-    _report("C^T", k[p, :])
-    _report("Z", k[p][:, p])
+    if len(p):
+        _report("C", k[:, p])
+        _report("C^T", k[p, :])
+        _report("Z", k[p][:, p])
 
     print(f"condition number of k: {condition_number(k)}")
 
     # Block scaling, then Schur scaling of the multipliers.
-    prepared = prepare(gauged)
+    prepared = prepare(system)
     k_scaled = prepared.system.k_globals
     _report("K_aa_scaled", k_scaled[edge, edge])
     _report("K_phiphi_scaled", k_scaled[node, node])
     _report("K_phia_scaled", k_scaled[edge, node])
     _report("K_aphi_scaled", k_scaled[node, edge])
-    _report("C_scaled", k_scaled[:, p])
-    _report("C_T_scaled", k_scaled[p, :])
-    _report("Z_scaled", k_scaled[p][:, p])
+    if len(p):
+        _report("C_scaled", k_scaled[:, p])
+        _report("C_T_scaled", k_scaled[p, :])
+        _report("Z_scaled", k_scaled[p][:, p])
 
     print(f"condition number of k_scaled: {condition_number(k_scaled)}")
     scale = prepared.unknown_scale
     print(f"edge scale   min {scale[edge].min():.3e}  max {scale[edge].max():.3e}")
     print(f"node scale   min {scale[node].min():.3e}  max {scale[node].max():.3e}")
-    print(f"multiplier   min {scale[p].min():.3e}  max {scale[p].max():.3e}")
+    if len(p):
+        print(f"multiplier   min {scale[p].min():.3e}  max {scale[p].max():.3e}")
 
     # solve_direct returns unknown_scale * y, the physical coefficient.
-    x = solve_direct(gauged)
-    residual = k @ x - gauged.f_globals
-    load = np.linalg.norm(gauged.f_globals)
+    x = solve_direct(system)
+    residual = k @ x - system.f_globals
+    load = np.linalg.norm(system.f_globals)
     relative = np.linalg.norm(residual) / load if load else np.linalg.norm(residual)
     print(f"recovered residual: {relative:.3e}")
 

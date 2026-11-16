@@ -6,7 +6,11 @@ import numpy as np
 
 from darwin.assemble import assemble
 from darwin.elements import GaussianQuadrature, TetrahedronWhitney, TriangleWhitney
-from darwin.formulation import Formulation
+from darwin.formulation import (
+    Formulation,
+    NodalEquation,
+    coefficients,
+)
 from darwin.material import EPSILON_0, MU_0, Material, materials_by_region
 from darwin.mesh_io import Mesh
 from darwin.topology import build_topology
@@ -186,6 +190,105 @@ class TestAssemble(unittest.TestCase):
             rtol=1e-10,
             atol=1e-10,
         )
+
+    def test_darwin_local_blocks_match_the_hand_integrals(self):
+        """Complete Darwin block check on the reference right triangle.
+
+        sigma, eps and omega are all nonzero, so every block is exercised:
+        K_AA = curl-curl + j*omega*sigma*M, K_Aphi = (sigma + j*omega*eps)*D,
+        K_phiA = j*omega*eps*D^T and K_phiphi = eps*G. Mixing up the phi_a
+        coefficient (j*omega*sigma instead of j*omega*eps) fails here by 1e7.
+        """
+        triangle = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        local_edges = [(0, 1), (0, 2), (1, 2)]
+        sigma, eps_r, frequency = 1.0, 2.0, 1.0e6
+        material = Material(name="unit", sigma=sigma, mu_r=1.0 / MU_0, eps_r=eps_r)
+        omega = 2.0 * np.pi * frequency
+        eps = eps_r * EPSILON_0
+
+        blocks = TriangleWhitney().darwin_local_forms(
+            Formulation.DARWIN,
+            triangle,
+            local_edges,
+            frequency,
+            material,
+            GaussianQuadrature(2, 2),
+        )
+
+        # D[e, j] = int w_e . grad(lambda_j), G = int grad(lambda_i).grad(lambda_j),
+        # M = int w_e . w_e' and curls = (2, -2, 2) on this triangle.
+        d = np.array([[-0.5, 1.0 / 3.0, 1.0 / 6.0], [-0.5, 1.0 / 6.0, 1.0 / 3.0], [0.0, -1.0 / 6.0, 1.0 / 6.0]])
+        g = np.array([[1.0, -0.5, -0.5], [-0.5, 0.5, 0.0], [-0.5, 0.0, 0.5]])
+        m = np.array([[1.0 / 3.0, 1.0 / 6.0, 0.0], [1.0 / 6.0, 1.0 / 3.0, 0.0], [0.0, 0.0, 1.0 / 6.0]])
+        curl = np.array([2.0, -2.0, 2.0])
+
+        np.testing.assert_allclose(blocks.K_Aphi, (sigma + 1j * omega * eps) * d, atol=1e-12)
+        np.testing.assert_allclose(blocks.K_phiA, 1j * omega * eps * d.T, rtol=1e-10, atol=1e-18)
+        np.testing.assert_allclose(blocks.K_phiphi, eps * g, rtol=1e-10, atol=1e-24)
+        np.testing.assert_allclose(
+            blocks.K_AA, 0.5 * np.outer(curl, curl) + 1j * omega * sigma * m, atol=1e-6
+        )
+        np.testing.assert_allclose(blocks.mass_edge, m, atol=1e-12)
+        np.testing.assert_allclose(blocks.rhs_edge, 0.0, atol=1e-12)
+        np.testing.assert_allclose(blocks.rhs_node, 0.0, atol=1e-12)
+
+    def test_darwin_charge_enters_the_nodal_load(self):
+        """A constant rho gives int(lambda_i) rho = rho/6 on the reference triangle."""
+        mesh = _mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], [[0, 1, 2]])
+        topology = build_topology(mesh)
+        rho = 2.5
+        system = assemble(
+            Formulation.DARWIN,
+            mesh,
+            topology,
+            _materials(mesh, Material(name="unit", sigma=1.0, mu_r=1.0 / MU_0, eps_r=2.0)),
+            1.0e6,
+            None,
+            TriangleWhitney(),
+            charge=lambda _point: rho,
+        )
+
+        self.assertEqual(system.formulation, Formulation.DARWIN)
+        np.testing.assert_allclose(system.f_globals[:3], 0.0, atol=1e-12)
+        np.testing.assert_allclose(system.f_globals[3:], rho / 6.0, atol=1e-12)
+
+    def test_charge_is_rejected_by_the_mqs_continuity_row(self):
+        mesh = _mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], [[0, 1, 2]])
+        topology = build_topology(mesh)
+        with self.assertRaises(ValueError):
+            assemble(
+                Formulation.MQS,
+                mesh,
+                topology,
+                _materials(mesh, _curl_only()),
+                1.0e6,
+                None,
+                TriangleWhitney(),
+                charge=lambda _point: 1.0,
+            )
+
+    def test_coefficients_follow_the_formulation(self):
+        """Darwin uses (sigma + j*omega*eps, j*omega*eps, eps) + the Gauss row."""
+        frequency = 1.0e6
+        omega = 2.0 * np.pi * frequency
+        eps = 2.0 * EPSILON_0
+        material = Material(name="unit", sigma=1.0, mu_r=1.0, eps_r=2.0)
+
+        darwin = coefficients(Formulation.DARWIN, material, frequency)
+        self.assertEqual(darwin.nodal, NodalEquation.GAUSS)
+        np.testing.assert_allclose(darwin.a_phi, 1.0 + 1j * omega * eps, rtol=1e-12)
+        np.testing.assert_allclose(darwin.phi_a, 1j * omega * eps, rtol=1e-12)
+        np.testing.assert_allclose(darwin.phi_phi, eps, rtol=1e-12)
+
+        mqs = coefficients(Formulation.MQS, material, frequency)
+        self.assertEqual(mqs.nodal, NodalEquation.CONTINUITY)
+        np.testing.assert_allclose(mqs.a_phi, 1.0, rtol=1e-12)
+        np.testing.assert_allclose(mqs.phi_a, 1j * omega * 1.0, rtol=1e-12)
+        np.testing.assert_allclose(mqs.phi_phi, 1.0, rtol=1e-12)
+
+        air = Material(name="air", sigma=0.0, mu_r=1.0, eps_r=0.0)
+        with self.assertRaises(ValueError):
+            coefficients(Formulation.DARWIN, air, frequency)
 
     def test_reference_tet_matches_the_hand_curl_curl(self):
         mesh = _mesh(

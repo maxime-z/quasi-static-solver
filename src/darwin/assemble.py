@@ -38,13 +38,16 @@ def assemble(
     frequency: float,
     source: Callable | None,
     element: Element,
+    charge: Callable | None = None,
     quadrature_degree: int = 2,
 ) -> System:
     """Scatter Darwin local blocks into one complex CSR matrix and one load vector.
 
     Unknown order is ``[all edges | all nodes]``. ``materials`` is keyed by
     region id, as returned by ``materials_by_region``. The mass and coupling
-    terms are quadratic, so the default quadrature degree is 2.
+    terms are quadratic, so the default quadrature degree is 2. ``source`` is
+    the MQS current density; ``charge`` is the Darwin charge density rho and
+    is only used with the Gauss row.
     """
     n_edges = topology.edges.shape[0]
     n_nodes = mesh.points.shape[0]
@@ -80,6 +83,7 @@ def assemble(
             materials[region],
             gauss_points,
             source,
+            charge,
         )
 
         edge_dof = topology.cell_edges[id_cell]
