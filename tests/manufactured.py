@@ -33,13 +33,14 @@ import numpy as np
 
 from darwin.assemble import assemble
 from darwin.bc import DirichletWall, apply_dirichlet
-from darwin.elements import TriangleWhitney
+from darwin.elements import TriangleWhitney, GaussianQuadrature
 from darwin.formulation import Formulation
 from darwin.material import EPSILON_0, MU_0, Material
 from darwin.mesh_io import Mesh
 from darwin.post import cell_fields, relative_l2
 from darwin.solve import solve_direct
 from darwin.topology import build_topology, tag_boundary
+
 
 FREQUENCY = 2.0e6
 SIGMA = 0.01
@@ -72,13 +73,13 @@ def exact_phi(points):
 
 def exact_grad_phi(points):
     points = np.atleast_2d(points)
-    x, y = points[:, 0], points[:, 1]
+    x, y = points[..., 0], points[..., 1]
     return np.stack(
         [
             -PHI0 * _HALF_PI * _sin_half(x) * _cos_half(y),
             -PHI0 * _HALF_PI * _cos_half(x) * _sin_half(y),
         ],
-        axis=1,
+        axis=-1,
     )
 
 
@@ -88,21 +89,26 @@ def exact_chi(points):
 
 
 def _grad_chi(points):
-    x, y = points[:, 0], points[:, 1]
+    x, y = points[..., 0], points[..., 1]
     return np.stack(
         [
             -CHI0 * _HALF_PI * np.sin(np.pi * x) * _cos_half(y) ** 2,
             -CHI0 * _HALF_PI * np.sin(np.pi * y) * _cos_half(x) ** 2,
         ],
-        axis=1,
+        axis=-1,
     )
 
 
 def _laplacian_chi(points):
     """``laplacian(chi) = -(pi^2/2) chi0 [cos(pi x) cos^2(pi y/2) + cos(pi y) cos^2(pi x/2)]``."""
-    x, y = points[:, 0], points[:, 1]
-    return -(2.0 * _HALF_PI**2) * CHI0 * (
-        np.cos(np.pi * x) * _cos_half(y) ** 2 + np.cos(np.pi * y) * _cos_half(x) ** 2
+    x, y = points[..., 0], points[..., 1]
+    return (
+        -(2.0 * _HALF_PI**2)
+        * CHI0
+        * (
+            np.cos(np.pi * x) * _cos_half(y) ** 2
+            + np.cos(np.pi * y) * _cos_half(x) ** 2
+        )
     )
 
 
@@ -112,10 +118,10 @@ def exact_a(points):
     grad_chi = _grad_chi(points)
     return np.stack(
         [
-            _ALPHA * grad_phi[:, 0] + grad_chi[:, 1],
-            _ALPHA * grad_phi[:, 1] - grad_chi[:, 0],
+            _ALPHA * grad_phi[..., 0] + grad_chi[..., 1],
+            _ALPHA * grad_phi[..., 1] - grad_chi[..., 0],
         ],
-        axis=1,
+        axis=-1,
     )
 
 
@@ -125,7 +131,7 @@ def exact_e(points):
 
 def exact_b(points):
     """``Bz = -laplacian(chi)``, shape ``(n_points, 1)``."""
-    return (-_laplacian_chi(np.atleast_2d(points)))[:, None]
+    return (-_laplacian_chi(np.atleast_2d(points)))[..., None]
 
 
 def exact_rho(points):
@@ -135,7 +141,9 @@ def exact_rho(points):
     ``rho = div(eps E) = -j omega eps div(A) - eps laplacian(phi)``.
     """
     points = np.atleast_2d(points)
-    laplacian_phi = -0.5 * np.pi**2 * PHI0 * _cos_half(points[:, 0]) * _cos_half(points[:, 1])
+    laplacian_phi = (
+        -0.5 * np.pi**2 * PHI0 * _cos_half(points[:, 0]) * _cos_half(points[:, 1])
+    )
     return -1j * _OMEGA * _EPS**2 * laplacian_phi / _COEFF_PHI
 
 
@@ -169,11 +177,7 @@ def square_mesh(n: int) -> Mesh:
     """``n x n`` square cells on ``[-1, 1]^2``, counter-clockwise triangles."""
     coordinates = np.linspace(-1.0, 1.0, n + 1)
     points = np.array(
-        [
-            [coordinates[i], coordinates[j]]
-            for j in range(n + 1)
-            for i in range(n + 1)
-        ]
+        [[coordinates[i], coordinates[j]] for j in range(n + 1) for i in range(n + 1)]
     )
     cells = []
     for j in range(n):
@@ -216,10 +220,16 @@ def solve_case(n: int, quadrature_degree: int = 6):
 def errors(n: int) -> tuple[float, float]:
     """Relative L2 errors ``(E, B)`` of the solution on the n x n mesh."""
     mesh, topology, x = solve_case(n)
-    e_samples, b_samples = cell_fields(mesh, topology, TriangleWhitney(), x, FREQUENCY)
+
+    x_hat = GaussianQuadrature(2, 2).points
+    weights = GaussianQuadrature(2, 2).weights
+
+    e_samples, b_samples = cell_fields(
+        mesh, topology, TriangleWhitney(), x, FREQUENCY, x_hat, weights
+    )
     return (
-        relative_l2(e_samples, exact_e(e_samples.centroid)),
-        relative_l2(b_samples, exact_b(b_samples.centroid)),
+        relative_l2(e_samples, exact_e(e_samples.point)),
+        relative_l2(b_samples, exact_b(b_samples.point)),
     )
 
 

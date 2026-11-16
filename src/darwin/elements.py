@@ -422,7 +422,3 @@ class GaussianQuadrature:
 
     def __len__(self):
         return len(self.weights)
-
-
-if __name__ == "__main__":
-    _duffy_triangle_rule(1)
