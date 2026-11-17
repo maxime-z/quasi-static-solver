@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.sparse import lil_matrix
+from scipy.sparse import csr_matrix, diags, lil_matrix
 
 from darwin.assemble import System
 from darwin.topology import Topology
@@ -152,23 +152,32 @@ def apply_dirichlet(
     tangential_edges = _equipotential_tangential_edges(topology, voltages)
     n_edges = _n_edges(system)
 
-    K = system.k_globals.tolil(copy=True)
+    K = csr_matrix(system.k_globals, copy=True)
     rhs = np.array(system.f_globals, dtype=complex, copy=True)
+    n_total = K.shape[0]
+
+    constrained = np.zeros(n_total, dtype=bool)
+    values = np.zeros(n_total, dtype=complex)
+    for edge in tangential_edges:
+        constrained[int(edge)] = True
+    for node, voltage in voltages.items():
+        dof = n_edges + node
+        constrained[dof] = True
+        values[dof] = complex(voltage)
 
     # Lift nonzero nodal values using the columns of the unmodified matrix.
     for node, voltage in voltages.items():
         if voltage == 0.0:
             continue
         dof = n_edges + node
-        column = K.getcol(dof).toarray().ravel()
-        rhs -= column * voltage
+        rhs -= K.getcol(dof).toarray().ravel() * voltage
 
-    # edge dof is always zero when applying dirichlet, so no need to 
-    for edge in tangential_edges:
-        _set_identity_dof(K, rhs, int(edge), 0.0)
-
-    for node, voltage in voltages.items():
-        _set_identity_dof(K, rhs, n_edges + node, complex(voltage))
+    # Zero the rows and columns of every constrained dof at once, then put the
+    # unit diagonal back. This is one sparse product instead of one row/column
+    # assignment per dof, which dominated the cost of apply_dirichlet.
+    mask = np.where(constrained, 0.0, 1.0)
+    K = diags(mask) @ K @ diags(mask) + diags(1.0 - mask)
+    rhs[constrained] = values[constrained]
 
     return System(
         system.formulation,

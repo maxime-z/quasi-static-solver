@@ -236,9 +236,9 @@ def solve_case(n: int, quadrature_degree: int = 6):
         topology,
         {0: material},
         FREQUENCY,
-        source_current,
+        _source_current,
         TetrahedronWhitney(),
-        charge=source_charge,
+        charge=_source_charge,
         quadrature_degree=quadrature_degree,
     )
     walls = [DirichletWall(tag, 0.0) for tag in sorted(set(mesh.facet_tags.values()))]
