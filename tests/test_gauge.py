@@ -4,10 +4,11 @@ import unittest
 
 import numpy as np
 from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import spsolve
 
 from darwin.assemble import System, assemble
 from darwin.bc import DirichletWall, apply_dirichlet
-from darwin.elements import TriangleWhitney
+from darwin.elements import TetrahedronWhitney, TriangleWhitney
 from darwin.formulation import Formulation
 from darwin.gauge import GaugeKind, apply_gauge
 from darwin.material import Material
@@ -277,3 +278,100 @@ class TestCoulomb(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _cube_mesh() -> Mesh:
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ]
+    )
+    cells = np.array(
+        [[0, 1, 2, 6], [0, 2, 3, 6], [0, 1, 5, 6], [0, 4, 5, 6], [0, 3, 7, 6], [0, 4, 7, 6]]
+    )
+    return Mesh(points, cells, np.zeros(6, dtype=int), {0: "body"})
+
+
+def _cube_topology():
+    mesh = _cube_mesh()
+    predicates = {
+        "xmin": lambda p: np.isclose(p[0], 0.0),
+        "xmax": lambda p: np.isclose(p[0], 1.0),
+        "ymin": lambda p: np.isclose(p[1], 0.0),
+        "ymax": lambda p: np.isclose(p[1], 1.0),
+        "zmin": lambda p: np.isclose(p[2], 0.0),
+        "zmax": lambda p: np.isclose(p[2], 1.0),
+    }
+    return mesh, build_topology(mesh, boundary_tags=tag_boundary(mesh, predicates))
+
+
+def _assemble_cube(source=None) -> tuple[Mesh, Topology, System]:
+    mesh, topology = _cube_topology()
+    material = Material("body", sigma=1.0, mu_r=1.0, eps_r=1.0)
+    system = assemble(
+        Formulation.MQS,
+        mesh,
+        topology,
+        {0: material},
+        frequency=1.0e6,
+        source=source,
+        element=TetrahedronWhitney(),
+    )
+    return mesh, topology, system
+
+
+class TestTetGauge(unittest.TestCase):
+    def test_unconstrained_cube_gets_seven_tree_edges(self):
+        _, topology, system = _assemble_cube()
+        gauged = apply_gauge(system, topology, GaugeKind.TREE)
+        n_edges = len(topology.edges)
+
+        self.assertEqual(len(gauged.tree_edges), 7)
+        a_block = gauged.system.k_globals.toarray()[:n_edges, :n_edges]
+        self.assertEqual(np.linalg.matrix_rank(a_block), n_edges)
+
+    def test_grounded_face_cuts_the_tree_to_four_edges(self):
+        _, topology, system = _assemble_cube()
+        grounded = apply_dirichlet(system, topology, [DirichletWall("zmin", 0.0)])
+        gauged = apply_gauge(grounded, topology, GaugeKind.TREE)
+        n_edges = len(topology.edges)
+
+        self.assertEqual(len(gauged.tree_edges), 4)
+        a_block = gauged.system.k_globals.toarray()[:n_edges, :n_edges]
+        self.assertEqual(np.linalg.matrix_rank(a_block), n_edges)
+
+    def test_coulomb_on_the_cube_constrains_the_free_node_potentials(self):
+        # A solenoidal drive (a circulating current) so that A is nonzero; a
+        # uniform current would be carried entirely by grad(phi).
+        _, topology, system = _assemble_cube(
+            lambda x: np.array([-x[1], x[0], 0.0])
+        )
+        grounded = apply_dirichlet(system, topology, [DirichletWall("zmin", 0.0)])
+        gauged = apply_gauge(grounded, topology, GaugeKind.COULOMB)
+        n_edges = len(topology.edges)
+        n_p = len(gauged.system.p_dofs)
+
+        # Nodes 4..7 are free; the component still touches the grounded face,
+        # so no multiplier column is dropped.
+        self.assertEqual(n_p, 4)
+        self.assertEqual(gauged.tree_edges.size, 0)
+
+        solution = spsolve(
+            gauged.system.k_globals.tocsr(), gauged.system.f_globals
+        )
+        self.assertTrue(np.all(np.isfinite(solution)))
+
+        fixed = _identity_rows(grounded.k_globals)
+        free_edges = np.array([e for e in range(n_edges) if e not in fixed])
+        free_nodes = np.arange(4, 8)
+        g_f = topology.incidence_matrix[np.ix_(free_edges, free_nodes)]
+        m_f = gauged.system.m_edge_globals[np.ix_(free_edges, free_edges)]
+        residual = g_f.T @ (m_f @ solution[free_edges])
+        self.assertLess(np.linalg.norm(residual) / np.linalg.norm(solution[free_edges]), 1e-9)

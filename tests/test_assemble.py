@@ -290,6 +290,83 @@ class TestAssemble(unittest.TestCase):
         with self.assertRaises(ValueError):
             coefficients(Formulation.DARWIN, air, frequency)
 
+    def test_skewed_tet_matches_the_hand_darwin_blocks(self):
+        """A tet with J != eye exercises the 3D metric in the curl-curl block."""
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.2, 0.1, 0.0],
+                [0.2, 1.1, 0.05],
+                [0.1, 0.3, 1.3],
+            ]
+        )
+        mesh = _mesh(points, [[0, 1, 2, 3]])
+        topology = build_topology(mesh)
+        material = Material(name="unit", sigma=1.0e-2, mu_r=1.0, eps_r=3.0)
+        frequency = 2.0e6
+        omega = 2.0 * np.pi * frequency
+        current = np.array([1.0, 2.0, 3.0])
+        rho = 2.5
+        element = TetrahedronWhitney()
+        system = assemble(
+            Formulation.DARWIN,
+            mesh,
+            topology,
+            _materials(mesh, material),
+            frequency,
+            lambda x: current,
+            element,
+            charge=lambda x: rho,
+            quadrature_degree=6,
+        )
+        k = system.k_globals.toarray()
+        coeffs = coefficients(Formulation.DARWIN, material, frequency)
+        nu = 1.0 / (material.mu_r * MU_0)
+
+        # Barycentric coordinates of the physical tet: lambda_i(x) = row i.
+        matrix = np.array([[1.0, 1.0, 1.0, 1.0], *points.T])
+        inverse = np.linalg.inv(matrix)
+        grads = inverse[:, 1:]  # (4, 3), row i = grad lambda_i
+        edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        jacobian = np.column_stack(
+            [points[1] - points[0], points[2] - points[0], points[3] - points[0]]
+        )
+        det_j = abs(np.linalg.det(jacobian))
+        volume = det_j / 6.0
+
+        quadrature = GaussianQuadrature(3, 6)
+        lam = np.column_stack(
+            [1.0 - quadrature.points.sum(axis=1), quadrature.points]
+        )
+        measure = quadrature.weights * det_j
+        whitney = np.empty((len(measure), len(edges), 3))
+        for a, (i, j) in enumerate(edges):
+            whitney[:, a, :] = lam[:, i, None] * grads[j] - lam[:, j, None] * grads[i]
+        curls = np.vstack([2.0 * np.cross(grads[i], grads[j]) for i, j in edges])
+
+        gram = np.einsum("q,qab,qcb->ac", measure, whitney, whitney)
+        mass = gram
+        k_aa = nu * (curls @ curls.T) * volume + 1j * omega * material.sigma * mass
+        k_a_phi = coeffs.a_phi * np.einsum("q,qab,ib->ai", measure, whitney, grads)
+        k_phi_a = coeffs.phi_a * np.einsum("q,qab,ib->ia", measure, whitney, grads)
+        k_phi_phi = coeffs.phi_phi * volume * (grads @ grads.T)
+        rhs_edge = np.einsum("q,qab,b->a", measure, whitney, current)
+        rhs_node = rho * (measure @ lam)
+
+        n_edges = len(topology.edges)
+        np.testing.assert_allclose(k[:n_edges, :n_edges], k_aa, rtol=1e-10, atol=1e-6)
+        np.testing.assert_allclose(k[:n_edges, n_edges:], k_a_phi, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(k[n_edges:, :n_edges], k_phi_a, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(k[n_edges:, n_edges:], k_phi_phi, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(system.f_globals[:n_edges], rhs_edge, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(system.f_globals[n_edges:], rhs_node, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(
+            system.m_edge_globals.toarray(), mass, rtol=1e-10, atol=1e-15
+        )
+        # J != eye must change the curl-curl block: the metric is really used.
+        reference = _hand_tet_aa()
+        self.assertGreater(np.max(np.abs(k_aa.real - nu * reference)), 1e-3)
+
     def test_reference_tet_matches_the_hand_curl_curl(self):
         mesh = _mesh(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],

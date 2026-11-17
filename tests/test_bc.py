@@ -546,3 +546,89 @@ class TestFloating(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCubeBoundary(unittest.TestCase):
+    def test_six_walls_eliminate_exactly_the_skin_edges(self):
+        _, topology, system = _assemble_cube()
+        constrained = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall(tag, 0.0) for tag in cube_predicates()],
+        )
+        k = constrained.k_globals.toarray()
+        n_edges = len(topology.edges)
+        n_nodes = len(topology.skin.nodes)
+
+        identity = {e for e in range(n_edges) if _is_identity_row(k, e)}
+        self.assertEqual(identity, {int(e) for e in topology.skin.edges})
+        self.assertEqual(len(identity), 18)
+        # Every node is on two walls, so every node row is an identity too.
+        for node in range(n_nodes):
+            self.assertTrue(_is_identity_row(k, n_edges + node), node)
+
+    def test_all_walls_grounded_solve_is_nonzero_on_the_interior_edge(self):
+        mesh = cube_mesh()
+        facets, tags = tag_boundary(mesh, cube_predicates())
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        material = _unit_material()
+        system = assemble(
+            Formulation.DARWIN,
+            mesh,
+            topology,
+            materials_by_region(mesh, {material.name: material}),
+            1.0,
+            lambda x: np.array([0.0, 0.0, 1.0]),
+            TetrahedronWhitney(),
+        )
+        constrained = apply_dirichlet(
+            system,
+            topology,
+            [DirichletWall(tag, 0.0) for tag in cube_predicates()],
+        )
+        diagonal = next(
+            eid
+            for eid, (a, b) in enumerate(topology.edges)
+            if {int(a), int(b)} == {0, 6}
+        )
+
+        solution = spsolve(constrained.k_globals.tocsr(), constrained.f_globals)
+
+        self.assertTrue(np.all(np.isfinite(solution)))
+        self.assertGreater(abs(solution[diagonal]), 1e-12)
+
+    def test_floating_top_face_ties_its_nodes(self):
+        mesh = cube_mesh()
+        facets, tags = tag_boundary(mesh, cube_predicates())
+        topology = build_topology(mesh, boundary_tags=(facets, tags))
+        conducting = Material(name="air", sigma=1.0, mu_r=1.0 / MU_0, eps_r=0.0)
+        system = assemble(
+            Formulation.MQS,
+            mesh,
+            topology,
+            materials_by_region(mesh, {conducting.name: conducting}),
+            1.0,
+            None,
+            TetrahedronWhitney(),
+        )
+        grounded = apply_dirichlet(system, topology, [DirichletWall("zmin", 0.0)])
+        floating = apply_floating(
+            grounded, topology, [FloatingConductor("zmax", current=1.0)]
+        )
+        k = floating.k_globals.toarray()
+        n_edges = len(topology.edges)
+        zmax_nodes = sorted(int(n) for n in topology.boundary["zmax"].nodes)
+        master = n_edges + zmax_nodes[0]
+
+        for node in zmax_nodes[1:]:
+            slave = n_edges + node
+            np.testing.assert_allclose(k[slave, slave], 1.0, atol=1e-12)
+            np.testing.assert_allclose(k[slave, master], -1.0, atol=1e-12)
+            row = np.array(k[slave, :], copy=True)
+            row[slave] = 0.0
+            row[master] = 0.0
+            np.testing.assert_allclose(row, 0.0, atol=1e-12)
+        self.assertAlmostEqual(float(floating.f_globals[master]), 1.0, places=12)
+
+        solution = spsolve(floating.k_globals.tocsr(), floating.f_globals)
+        self.assertTrue(np.all(np.isfinite(solution)))

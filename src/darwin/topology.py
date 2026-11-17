@@ -173,6 +173,9 @@ def build_topology(
     skin = _boundary_from_facets(skin_list, edge_ids)
 
     boundary: dict[str, Boundary] = {}
+    if boundary_tags is None and mesh.facet_tags:
+        facets = list(mesh.facet_tags)
+        boundary_tags = (facets, [mesh.facet_tags[facet] for facet in facets])
     if boundary_tags is not None:
         facets, tags = boundary_tags
         if len(facets) != len(tags):

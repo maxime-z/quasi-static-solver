@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib.collections import PolyCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 from darwin.bc import DirichletWall, FloatingConductor
 from darwin.material import Material
 from darwin.mesh_io import Mesh
-from darwin.topology import Topology
+from darwin.topology import Topology, skin_facets
 
 # Dark colors, chosen so a wall stays visible on a tab10 region face.
 _WALL_COLORS = ("#c0392b", "#e67e22", "#1e8449", "#6c3483", "#1a5276", "#b7950b")
@@ -147,3 +148,104 @@ def _fmt(value) -> str:
     if abs(number.imag) < 1e-15 * max(1.0, abs(number.real)):
         return f"{number.real:g}"
     return f"{number.real:g}{number.imag:+g}j"
+
+
+def plot_configuration_3d(
+    mesh: Mesh,
+    topology: Topology,
+    path: Path,
+    materials: dict[int, Material] | None = None,
+    walls: list[DirichletWall | FloatingConductor] | None = None,
+    source: Callable | None = None,
+    title: str = "",
+) -> None:
+    """Draw the skin of a three dimensional mesh, its named walls and a source.
+
+    Every skin facet is one translucent polygon, coloured by the boundary tag
+    that owns its nodes; a facet on no tag is drawn grey. The source current is
+    sampled at the cell centroids.
+    """
+    points = np.asarray(mesh.points, dtype=float)
+    fig = plt.figure(figsize=(7.6, 6.4))
+    ax = fig.add_subplot(111, projection="3d")
+
+    tags = list(topology.boundary)
+    cmap = plt.get_cmap("tab10")
+    color_of = {tag: cmap(i % 10) for i, tag in enumerate(tags)}
+    faces, colors = [], []
+    for facet in skin_facets(mesh):
+        facet = tuple(int(n) for n in facet)
+        faces.append(points[list(facet)])
+        tag = _facet_tag(topology, facet)
+        colors.append(color_of[tag] if tag in color_of else (0.75, 0.75, 0.75, 1.0))
+    ax.add_collection3d(
+        Poly3DCollection(faces, facecolors=colors, edgecolors="0.35", linewidths=0.4, alpha=0.35)
+    )
+
+    handles = []
+    if materials is not None:
+        handles.extend(
+            Patch(facecolor=color_of[tag], edgecolor="0.6", label=_wall_label(tag, _wall_of(walls, tag)))
+            for tag in tags
+        )
+    elif tags:
+        handles.extend(
+            Patch(facecolor=color_of[tag], edgecolor="0.6", label=_wall_label(tag, _wall_of(walls, tag)))
+            for tag in tags
+        )
+
+    if source is not None:
+        centroids = np.array([points[cell].mean(axis=0) for cell in mesh.cells])
+        current = np.vstack([np.real(np.asarray(source(x), dtype=complex)).ravel()[:3] for x in centroids])
+        carries = np.linalg.norm(current, axis=1) > 0
+        if np.any(carries):
+            step = max(1, int(carries.sum()) // 60)
+            chosen = np.flatnonzero(carries)[::step]
+            ax.quiver(
+                centroids[chosen, 0],
+                centroids[chosen, 1],
+                centroids[chosen, 2],
+                current[chosen, 0],
+                current[chosen, 1],
+                current[chosen, 2],
+                color="0.1",
+                length=0.35,
+                normalize=True,
+            )
+            handles.append(Line2D([0], [0], color="0.1", lw=1.5, label="source current J"))
+
+    if handles:
+        ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), framealpha=0.95)
+    _set_equal_3d(ax, points)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_title(title or "problem configuration")
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+
+
+def _facet_tag(topology: Topology, facet: tuple[int, ...]) -> str | None:
+    nodes = set(facet)
+    for tag, boundary in topology.boundary.items():
+        if nodes <= {int(n) for n in boundary.nodes}:
+            return tag
+    return None
+
+
+def _wall_of(walls, tag: str):
+    for wall in walls or []:
+        if wall.tag == tag:
+            return wall
+    return None
+
+
+def _set_equal_3d(ax, points: np.ndarray) -> None:
+    lo, hi = points.min(axis=0), points.max(axis=0)
+    center = 0.5 * (lo + hi)
+    radius = 0.5 * float(np.max(hi - lo)) or 0.5
+    ax.set_xlim(center[0] - radius, center[0] + radius)
+    ax.set_ylim(center[1] - radius, center[1] + radius)
+    ax.set_zlim(center[2] - radius, center[2] + radius)
+    ax.set_box_aspect((1, 1, 1))

@@ -367,6 +367,36 @@ def _duffy_triangle_rule(degree: int):
     return points, quad_weights
 
 
+def _duffy_tetrahedron_rule(degree: int):
+    """Gauss rule on the reference tetrahedron through the Duffy map.
+
+    (xi, eta, zeta) = (u, (1 - u) v, (1 - u) (1 - v) w) maps the unit cube
+    onto the tetrahedron with jacobian (1 - u)^2 (1 - v). n Gauss points per
+    direction integrate every polynomial of total degree <= 2 n - 4 exactly:
+    the mapped integrand has degree ``degree + 3`` and each direction is
+    exact up to degree ``2 n - 1``.
+    """
+    n = (degree + 5) // 2
+    nodes, weights = np.polynomial.legendre.leggauss(n)
+    u = 0.5 * (nodes + 1.0)
+    wu = 0.5 * weights
+    points = np.empty((n**3, 3))
+    quad_weights = np.empty(n**3)
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                m = (i * n + j) * n + k
+                points[m] = (
+                    u[i],
+                    (1.0 - u[i]) * u[j],
+                    (1.0 - u[i]) * (1.0 - u[j]) * u[k],
+                )
+                quad_weights[m] = (
+                    wu[i] * wu[j] * wu[k] * (1.0 - u[i]) ** 2 * (1.0 - u[j])
+                )
+    return points, quad_weights
+
+
 class GaussianQuadrature:
     """Reference-cell rules. degree is the exact polynomial degree."""
 
@@ -409,6 +439,8 @@ class GaussianQuadrature:
         rule = self._RULES.get((dim, degree))
         if rule is None and dim == 2:
             rule = _duffy_triangle_rule(degree)
+        if rule is None and dim == 3:
+            rule = _duffy_tetrahedron_rule(degree)
         if rule is None:
             raise NotImplementedError(f"no rule for dim={dim}, degree={degree}")
         self.dim = dim
