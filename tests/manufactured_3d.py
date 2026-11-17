@@ -17,6 +17,7 @@ them. ``div A = 0``, and the sources follow from
 """
 
 import sys
+import time
 
 import numpy as np
 
@@ -71,9 +72,13 @@ def _vector_potential(points: np.ndarray) -> np.ndarray:
 
 def _magnetic_field(points: np.ndarray) -> np.ndarray:
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    return 2 * CHI_0 * np.stack(
-        ((1 - x**2) * (z - y), (1 - y**2) * (x - z), (1 - z**2) * (y - x)),
-        axis=1,
+    return (
+        2
+        * CHI_0
+        * np.stack(
+            ((1 - x**2) * (z - y), (1 - y**2) * (x - z), (1 - z**2) * (y - x)),
+            axis=1,
+        )
     )
 
 
@@ -84,13 +89,17 @@ def _scalar_potential(points: np.ndarray) -> np.ndarray:
 
 def _gradient_potential(points: np.ndarray) -> np.ndarray:
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    return -2 * PHI_0 * np.stack(
-        (
-            x * (1 - y**2) * (1 - z**2),
-            (1 - x**2) * y * (1 - z**2),
-            (1 - x**2) * (1 - y**2) * z,
-        ),
-        axis=1,
+    return (
+        -2
+        * PHI_0
+        * np.stack(
+            (
+                x * (1 - y**2) * (1 - z**2),
+                (1 - x**2) * y * (1 - z**2),
+                (1 - x**2) * (1 - y**2) * z,
+            ),
+            axis=1,
+        )
     )
 
 
@@ -123,13 +132,17 @@ def exact_b(points: np.ndarray) -> np.ndarray:
 
 def _source_current(points: np.ndarray) -> np.ndarray:
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    curl_b = 2 * CHI_0 * np.stack(
-        (
-            2 - y**2 - z**2,
-            2 - z**2 - x**2,
-            2 - x**2 - y**2,
-        ),
-        axis=1,
+    curl_b = (
+        2
+        * CHI_0
+        * np.stack(
+            (
+                2 - y**2 - z**2,
+                2 - z**2 - x**2,
+                2 - x**2 - y**2,
+            ),
+            axis=1,
+        )
     )
     return (
         NU * curl_b
@@ -140,10 +153,10 @@ def _source_current(points: np.ndarray) -> np.ndarray:
 
 def _source_charge(points: np.ndarray) -> np.ndarray:
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    laplacian = -2 * PHI_0 * (
-        (1 - y**2) * (1 - z**2)
-        + (1 - x**2) * (1 - z**2)
-        + (1 - x**2) * (1 - y**2)
+    laplacian = (
+        -2
+        * PHI_0
+        * ((1 - y**2) * (1 - z**2) + (1 - x**2) * (1 - z**2) + (1 - x**2) * (1 - y**2))
     )
     return -1j * OMEGA * EPS**2 * laplacian / (SIGMA + 1j * OMEGA * EPS)
 
@@ -203,7 +216,9 @@ def cube_mesh(n: int) -> Mesh:
     }
     from darwin.topology import tag_boundary
 
-    facets, names = tag_boundary(Mesh(points, cells, np.zeros(len(cells), dtype=int)), tags)
+    facets, names = tag_boundary(
+        Mesh(points, cells, np.zeros(len(cells), dtype=int)), tags
+    )
     facet_tags = {facet: name for facet, name in zip(facets, names)}
     return Mesh(points, cells, np.zeros(len(cells), dtype=int), facet_tags=facet_tags)
 
@@ -214,6 +229,7 @@ def solve_case(n: int, quadrature_degree: int = 6):
     topology = build_topology(mesh)
     material = Material("body", sigma=SIGMA, mu_r=MU_R, eps_r=EPS_R)
 
+    time_start = time.time()
     system = assemble(
         Formulation.DARWIN,
         mesh,
@@ -227,7 +243,15 @@ def solve_case(n: int, quadrature_degree: int = 6):
     )
     walls = [DirichletWall(tag, 0.0) for tag in sorted(set(mesh.facet_tags.values()))]
     system = apply_dirichlet(system, topology, walls)
-    return mesh, topology, solve_direct(system)
+    time_end_assembly = time.time()
+    print(
+        f"Assembly and Dirichlet constraints time taken: {time_end_assembly - time_start} seconds"
+    )
+    x = solve_direct(system)
+    time_end_solve = time.time()
+    print(f"Solve time taken: {time_end_solve - time_end_assembly} seconds")
+
+    return mesh, topology, x
 
 
 def errors(n: int) -> tuple[float, float]:
@@ -245,7 +269,7 @@ def errors(n: int) -> tuple[float, float]:
 
 if __name__ == "__main__":
     previous = None
-    for n in (2, 4, 8):
+    for n in (2, 4, 8, 16):
         current = errors(n)
         order = ""
         if previous is not None:

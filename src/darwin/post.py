@@ -29,7 +29,7 @@ class CellSamples:
 
     point: np.ndarray  # (n_cell, n_q, dim)
     measure: np.ndarray  # (n_cell, n_q)
-    value: np.ndarray  # (n_cell, n_component), complex
+    value: np.ndarray  # (n_cell, n_q, n_component), complex
 
 
 def cell_fields(
@@ -41,18 +41,17 @@ def cell_fields(
     x_hat: np.ndarray,
     weights: np.ndarray,
 ) -> tuple[CellSamples, CellSamples]:
-    """Return ``(E, B)`` at the centroid of every cell.
-
+    """Return ``(E, B)`` at the quadrature points of every cell.
 
     Args:
         mesh: The mesh to sample the fields on.
         topology: The topology of the mesh.
         element: The element to use for the sampling.
         x: The full unknown vector ``[a_edge | phi_node]`` in the order used
-        by :func:`darwin.assemble.assemble`.
+            by :func:`darwin.assemble.assemble`.
         frequency: The frequency of the fields.
-        x_hat: The local coordinates of the quadrature points.
-        weights: The weights of the quadrature points.
+        x_hat: The local coordinates of the quadrature points ``(n_q, dim)``.
+        weights: The weights of the quadrature points ``(n_q,)``.
 
     Returns:
         A tuple of :class:`CellSamples` objects for the electric and magnetic fields.
@@ -63,13 +62,15 @@ def cell_fields(
     omega = 2 * np.pi * frequency
     dim = mesh.points.shape[1]
     n_cells = len(mesh.cells)
-
-    # x_hat = np.full(dim, 1.0 / (dim + 1.0))
     n_q = x_hat.shape[0]
+    x_hat = np.asarray(x_hat, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
     points = np.empty((n_cells, n_q, dim))
     measure = np.empty((n_cells, n_q))
     e_value = np.empty((n_cells, n_q, dim), dtype=complex)
     b_value = np.empty((n_cells, n_q, 1 if dim == 2 else 3), dtype=complex)
+
     for i, cell in enumerate(mesh.cells):
         nodes = mesh.points[cell]
         local_of = {int(g): k for k, g in enumerate(cell)}
@@ -79,25 +80,38 @@ def cell_fields(
             for n1, n2 in topology.edges[edge_ids]
         ]
 
-        for q in range(n_q):
-            x_hat_q = x_hat[q]
-            jacobian = element.jacobian_matrix(x_hat_q, nodes)
-            det_j = float(np.linalg.det(jacobian))
-            inverse = np.linalg.inv(jacobian)
-            lam = element.nodal_basis_functions(x_hat_q).ravel()
-            points[i, q] = lam @ nodes
-            w = element.whiteney_basis_functions(x_hat_q, pairs) @ inverse
-            grad = element.gradient_nodal_basis_functions(x_hat_q) @ inverse
-            curl = element.curl_whiteney_basis_functions(x_hat_q, pairs)
-            a_cell = a[edge_ids]
-            e_value[i, q] = -1j * omega * (a_cell @ w) - phi[cell] @ grad
-            if dim == 2:
-                b_value[i, q, 0] = (a_cell @ curl[:, 0]) / det_j
-            else:
-                b_value[i, q] = (jacobian @ (a_cell @ curl)) / det_j
-            measure[i, q] = (
-                weights[q] * abs(det_j) if dim == 2 else weights[q] * abs(det_j)
-            )
+        J = element.jacobian_matrix(x_hat, nodes)  # (n_q, dim, dim)
+        det_j = np.linalg.det(J)  # (n_q,)
+        inv_J = np.linalg.inv(J)  # (n_q, dim, dim)
+        lam = element.nodal_basis_functions(x_hat)[..., 0]  # (n_q, n_nodes)
+        points[i] = lam @ nodes  # (n_q, dim)
+
+        w = np.einsum(
+            "qed,qdf->qef",
+            element.whiteney_basis_functions(x_hat, pairs),
+            inv_J,
+        )
+        grad = np.einsum(
+            "qnd,qdf->qnf",
+            element.gradient_nodal_basis_functions(x_hat),
+            inv_J,
+        )
+        curl = element.curl_whiteney_basis_functions(x_hat, pairs)
+
+        a_cell = a[edge_ids]
+        phi_cell = phi[cell]
+        e_value[i] = -1j * omega * np.einsum("e,qed->qd", a_cell, w) - np.einsum(
+            "n,qnd->qd", phi_cell, grad
+        )
+
+        if dim == 2:
+            b_value[i, :, 0] = np.einsum("e,qe->q", a_cell, curl[..., 0]) / det_j
+        else:
+            curl_a = np.einsum("e,qed->qd", a_cell, curl)
+            b_value[i] = np.einsum("qdi,qi->qd", J, curl_a) / det_j[:, None]
+
+        measure[i] = weights * np.abs(det_j)
+
     return (
         CellSamples(points, measure, e_value),
         CellSamples(points, measure, b_value),
